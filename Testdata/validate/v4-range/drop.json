@@ -1,0 +1,4 @@
+[
+{"id":"drop_a","monster_id":"slime_green","item_id":"potion_hp","rate":1.4},
+{"id":"drop_b","monster_id":"wolf_gray","item_id":"sword_iron","rate":-0.5}
+]

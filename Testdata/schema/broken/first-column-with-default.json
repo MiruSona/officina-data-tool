@@ -1,0 +1,6 @@
+{ "version": 1, "namespace": "MyGame.Data",
+  "enums": { "Grade": ["common", "rare", "epic"] },
+  "tables": [
+    { "name": "item", "columns": [
+      { "name": "id",   "type": "string", "default": "none" },
+      { "name": "name", "type": "string" } ] } ] }

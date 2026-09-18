@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DataTool 표 편집기</title>
+<link rel="stylesheet" href="vendor/tabulator.min.css">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="bar">
+  <div class="brand">
+    <span class="mark" aria-hidden="true"></span>
+    <span class="title">DataTool</span>
+    <span class="path" id="dataPath"></span>
+  </div>
+  <div class="actions">
+    <span class="dirty" id="dirty" hidden>저장 안 한 변경</span>
+    <button type="button" id="addRow" class="btn">행 추가</button>
+    <button type="button" id="delRow" class="btn">행 지우기</button>
+    <button type="button" id="validate" class="btn">검증</button>
+    <button type="button" id="save" class="btn primary">저장</button>
+  </div>
+</header>
+
+<p class="hint">
+  빈 칸 — <b>필수 열</b>은 빈 채로 두면 저장할 때 검증에 걸리고, <b>기본값이 있는 열</b>은 기본값으로 채워진다 ·
+  참거짓은 <code>true</code>·<code>false</code> 만 쓴다 · 목록은 <b>쉼표</b>로 나눈다 (앞뒤 공백은 턴다)
+</p>
+
+<main class="layout">
+  <nav class="tables" aria-label="표 목록">
+    <h2 class="label">표</h2>
+    <ul id="tableList"></ul>
+  </nav>
+
+  <section class="grid" aria-label="표 편집">
+    <div id="table"></div>
+  </section>
+
+  <section class="problems" aria-label="문제 목록">
+    <h2 class="label">문제 <span class="count" id="problemCount">0</span></h2>
+    <ul id="problemList">
+      <li class="empty">검증을 누르면 여기에 문제가 뜬다.</li>
+    </ul>
+  </section>
+</main>
+
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+<script src="vendor/tabulator.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

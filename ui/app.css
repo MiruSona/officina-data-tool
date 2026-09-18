@@ -1,0 +1,346 @@
+/* DataTool 표 편집기 화면.
+   색은 :root 토큰 하나로 정하고 다크 모드는 토큰만 다시 정한다 —
+   규칙이 컴포넌트 안으로 들어가면 한쪽 테마에서만 읽히는 글씨가 생긴다. */
+
+:root {
+  color-scheme: light dark;
+
+  --paper: #eef1f4;
+  --surface: #ffffff;
+  --surface-2: #f6f8fa;
+  --line: #d3dae1;
+  --ink: #16202b;
+  --muted: #5d6b7a;
+  --accent: #1f6f5c;
+  --accent-ink: #ffffff;
+  --danger: #a4241c;
+  --danger-soft: #fbeceb;
+  --warn: #8a5a08;
+  --focus: #2f6f5e;
+
+  --radius: 6px;
+  --gap: 12px;
+  --font: ui-sans-serif, "Segoe UI", "Malgun Gothic", system-ui, sans-serif;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, "D2Coding", monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #0f151b;
+    --surface: #18212a;
+    --surface-2: #1e2832;
+    --line: #2e3b47;
+    --ink: #e4ecf2;
+    --muted: #94a5b5;
+    --accent: #52bd9d;
+    --accent-ink: #08221b;
+    --danger: #f08b82;
+    --danger-soft: #3a1f1d;
+    --warn: #e0a955;
+    --focus: #52bd9d;
+  }
+}
+
+:root[data-theme="dark"] {
+  --paper: #0f151b;
+  --surface: #18212a;
+  --surface-2: #1e2832;
+  --line: #2e3b47;
+  --ink: #e4ecf2;
+  --muted: #94a5b5;
+  --accent: #52bd9d;
+  --accent-ink: #08221b;
+  --danger: #f08b82;
+  --danger-soft: #3a1f1d;
+  --warn: #e0a955;
+  --focus: #52bd9d;
+}
+
+* { box-sizing: border-box; }
+
+html, body { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 14px/1.5 var(--font);
+  display: flex;
+  flex-direction: column;
+}
+
+button { font: inherit; color: inherit; }
+
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+
+/* 위 막대 ------------------------------------------------------------ */
+
+.bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap);
+  padding: 10px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+
+.brand { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+
+.mark {
+  width: 10px; height: 10px;
+  border-radius: 2px;
+  background: var(--accent);
+  align-self: center;
+}
+
+.title { font-weight: 650; letter-spacing: .01em; }
+
+.path {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+.dirty {
+  font-size: 12px;
+  color: var(--warn);
+  padding: 2px 8px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+}
+
+.btn {
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  cursor: pointer;
+}
+
+.btn:hover { border-color: var(--accent); }
+
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+.btn[disabled] { opacity: .5; cursor: default; }
+
+/* 본문 세 칸 --------------------------------------------------------- */
+
+.layout {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "tables grid"
+    "tables problems";
+  gap: 1px;
+  background: var(--line);
+}
+
+/* 값 적는 규칙 한 줄. 표 위에 늘 떠 있어야 해서 layout 밖에 둔다 (layout 은 남는 높이를 다 먹는다). */
+.hint {
+  margin: 0;
+  padding: 6px 16px;
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+
+.hint code {
+  padding: 0 3px;
+  border-radius: 3px;
+  background: var(--line);
+  font-family: ui-monospace, Consolas, monospace;
+}
+
+.tables { grid-area: tables; background: var(--surface); padding: 12px 8px; overflow: auto; }
+.grid { grid-area: grid; background: var(--surface); min-width: 0; overflow: hidden; }
+.problems { grid-area: problems; background: var(--surface); padding: 10px 16px; max-height: 32vh; overflow: auto; }
+
+.label {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.count {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+.tables ul, .problems ul { list-style: none; margin: 0; padding: 0; }
+
+.tables li + li { margin-top: 2px; }
+
+.tables button {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--radius);
+  background: none;
+  cursor: pointer;
+  text-align: left;
+}
+
+.tables button:hover { background: var(--surface-2); }
+
+.tables button[aria-current="true"] {
+  background: var(--surface-2);
+  box-shadow: inset 2px 0 0 var(--accent);
+  font-weight: 600;
+}
+
+.tables .rows {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* 문제 목록 ---------------------------------------------------------- */
+
+.problems li { border-top: 1px solid var(--line); }
+.problems li:first-child { border-top: 0; }
+.problems li.empty { color: var(--muted); padding: 4px 0; }
+
+.problems .row {
+  display: flex;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 4px;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+}
+
+.problems .row:hover { background: var(--danger-soft); }
+
+.problems .where {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--danger);
+  white-space: nowrap;
+}
+
+.problems .what { color: var(--ink); }
+
+/* 토스트 -------------------------------------------------------------- */
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  max-width: min(560px, calc(100vw - 32px));
+  padding: 10px 16px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  box-shadow: 0 6px 20px rgb(0 0 0 / .18);
+}
+
+.toast.bad { border-color: var(--danger); color: var(--danger); }
+
+/* Tabulator 를 우리 토큰에 맞춘다 (기본 테마는 밝은 색이 박혀 있다) ---- */
+
+.tabulator {
+  background: var(--surface);
+  border: 0;
+  font-size: 13px;
+}
+
+.tabulator .tabulator-header,
+.tabulator .tabulator-header .tabulator-col {
+  background: var(--surface-2);
+  color: var(--ink);
+  border-color: var(--line);
+}
+
+.tabulator .tabulator-header .tabulator-col .tabulator-col-title { font-weight: 600; }
+
+.tabulator .tabulator-col .req { color: var(--danger); }
+.tabulator .tabulator-col .type {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.tabulator .tabulator-row { background: var(--surface); color: var(--ink); border-color: var(--line); }
+.tabulator .tabulator-row.tabulator-row-even { background: var(--surface-2); }
+.tabulator .tabulator-row:hover { background: var(--paper); }
+.tabulator .tabulator-row .tabulator-cell { border-color: var(--line); }
+.tabulator .tabulator-row .tabulator-cell.tabulator-editing { border-color: var(--accent); }
+.tabulator .tabulator-row .tabulator-cell input,
+.tabulator .tabulator-row .tabulator-cell select {
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+}
+
+.tabulator .tabulator-row .tabulator-cell.num {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.tabulator .tabulator-row .tabulator-cell.bad { background: var(--danger-soft); }
+
+.tabulator .tabulator-row .tabulator-cell.flash { animation: flash 1.2s ease-out; }
+
+@keyframes flash {
+  from { background: var(--accent); color: var(--accent-ink); }
+  to { background: transparent; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tabulator .tabulator-row .tabulator-cell.flash { animation: none; outline: 2px solid var(--accent); }
+}
+
+.tabulator-menu, .tabulator-edit-list {
+  background: var(--surface);
+  color: var(--ink);
+  border-color: var(--line);
+}
+
+.tabulator-edit-list .tabulator-edit-list-item.active,
+.tabulator-edit-list .tabulator-edit-list-item:hover {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+/* 좁은 화면 : 표 목록이 위로 눕는다. 표 자체는 가로로 넘겨 본다 ------- */
+
+@media (max-width: 720px) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(240px, 1fr) auto;
+    grid-template-areas: "tables" "grid" "problems";
+  }
+  .tables { padding: 8px 16px; }
+  .tables ul { display: flex; gap: 6px; overflow-x: auto; }
+  .tables li + li { margin-top: 0; }
+  .tables button { width: auto; white-space: nowrap; border: 1px solid var(--line); }
+  .problems { max-height: 40vh; }
+}

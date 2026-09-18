@@ -1,0 +1,4 @@
+{ "version": 1, "namespace": "MyGame.Data",
+  "tables": [
+    { "name": "Item", "columns": [
+      { "name": "id", "type": "string" } ] } ] }

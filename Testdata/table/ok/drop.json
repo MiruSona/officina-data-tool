@@ -1,0 +1,10 @@
+[
+{"id":"drop_slime_g_potion","monster_id":"slime_green","item_id":"potion_hp","rate":0.5},
+{"id":"drop_slime_g_gem","monster_id":"slime_green","item_id":"gem_fire","rate":0.01},
+{"id":"drop_slime_b_potion","monster_id":"slime_blue","item_id":"potion_mp","rate":0.4,"counts":[1,2]},
+{"id":"drop_wolf_sword","monster_id":"wolf_gray","item_id":"sword_iron","rate":0.05},
+{"id":"drop_wolf_bow","monster_id":"wolf_gray","item_id":"bow_short","rate":0.03},
+{"id":"drop_golem_steel","monster_id":"golem_fire","item_id":"sword_steel","rate":0.02},
+{"id":"drop_golem_gem","monster_id":"golem_fire","item_id":"gem_fire","rate":0.1,"counts":[1,2,3]},
+{"id":"drop_golem_potion","monster_id":"golem_fire","item_id":"potion_hp","rate":0.25}
+]

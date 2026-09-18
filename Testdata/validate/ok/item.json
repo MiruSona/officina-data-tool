@@ -1,0 +1,8 @@
+[
+{"id":"sword_iron","name":"철검","atk":12,"price":300,"tags":["weapon","melee"]},
+{"id":"sword_steel","name":"강철검","atk":24,"price":900,"grade":"rare","tags":["weapon","melee"]},
+{"id":"bow_short","name":"단궁","atk":9,"price":250,"tags":["weapon","ranged"]},
+{"id":"potion_hp","name":"체력 물약","price":50,"usable":true,"tags":["consume"]},
+{"id":"potion_mp","name":"마나 물약","price":60,"usable":true,"tags":["consume"]},
+{"id":"gem_fire","name":"불의 보석","price":1200,"grade":"epic"}
+]

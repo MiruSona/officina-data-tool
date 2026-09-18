@@ -1,0 +1,143 @@
+using System;
+using System.IO;
+
+namespace Officina.Data
+{
+    // 구운 gamedata.bytes 를 읽어 GameDataTables 로 만드는 자리다.
+    //
+    // 이 파일은 datatool 이 만든 것이 아니라 손으로 쓴 것이고, 게임 프로젝트가 복사해 간다.
+    // 암호화·압축이 붙을 자리가 여기라 2차에도 생성 코드는 안 건드린다 (설계 8장·10장).
+    //
+    // 파일 머리 16바이트 :
+    //   [0..3] 매직 "OFDT" · [4] 형식판 · [5] 플래그 · [6..7] 예약
+    //   [8..11] 본문 길이(uint32 LE) · [12..15] 예약 · [16..] MessagePack 본문
+    public static class GameDataLoader
+    {
+        public const int HeaderSize = 16;
+        public const byte FormatVersion = 1;
+        public const string FileName = "gamedata.bytes";
+
+        private const byte FlagEncrypted = 0x01;
+        private const byte FlagCompressed = 0x02;
+
+        // 마지막으로 읽은 표 묶음이다. 게임이 한 벌만 들고 도는 흔한 꼴을 그대로 받쳐 준다.
+        public static GameDataTables Current { get; private set; }
+
+        // 바이트 뭉치를 읽어 표로 만든다. Current 에도 넣는다.
+        public static GameDataTables Load(byte[] raw)
+        {
+            GameDataTables tables = GameDataTables.Deserialize(ReadBody(raw));
+            Current = tables;
+            return tables;
+        }
+
+        public static GameDataTables LoadFromFile(string path)
+        {
+            if (string.IsNullOrEmpty(path))
+            {
+                throw new ArgumentNullException(nameof(path));
+            }
+
+            if (File.Exists(path) == false)
+            {
+                throw new GameDataException("구운 데이터 파일이 없다 : " + path);
+            }
+
+            return Load(File.ReadAllBytes(path));
+        }
+
+#if UNITY_5_3_OR_NEWER
+        // StreamingAssets 에서 읽는다.
+        // 안드로이드에서는 이 폴더가 압축된 jar 안이라 File 로 못 읽는다 —
+        // 그 판에서는 UnityWebRequest 로 바이트를 받아 Load(byte[]) 를 부른다 (Unity/README.md).
+        public static GameDataTables LoadFromStreamingAssets()
+        {
+            return LoadFromStreamingAssets(FileName);
+        }
+
+        public static GameDataTables LoadFromStreamingAssets(string fileName)
+        {
+            string path = Path.Combine(UnityEngine.Application.streamingAssetsPath, fileName);
+            return LoadFromFile(path);
+        }
+#endif
+
+        // 이미 읽어 둔 표를 갈아 끼운다 (시험이나 핫리로드용).
+        public static void SetCurrent(GameDataTables tables)
+        {
+            Current = tables;
+        }
+
+        // 아직 안 읽었으면 예외다. 데이터가 없는 채로 게임이 흘러가는 것이 제일 나쁘다.
+        public static GameDataTables Require()
+        {
+            if (Current == null)
+            {
+                throw new GameDataException("아직 데이터를 안 읽었다 — GameDataLoader.Load 를 먼저 불러라");
+            }
+
+            return Current;
+        }
+
+        // ref 열의 값(id)으로 다른 표의 행을 집는다. 없으면 null 이다.
+        public static T Get<T>(string id) where T : class
+        {
+            return Require().Get<T>(id);
+        }
+
+        // 머리 16바이트를 검사하고 본문 자리를 돌려준다. 어긋나면 바로 예외다.
+        public static ReadOnlyMemory<byte> ReadBody(byte[] raw)
+        {
+            if (raw == null)
+            {
+                throw new ArgumentNullException(nameof(raw));
+            }
+
+            if (raw.Length < HeaderSize)
+            {
+                throw new GameDataException("구운 파일이 머리 16바이트보다 짧다 : " + raw.Length + "바이트");
+            }
+
+            if (raw[0] != (byte)'O' || raw[1] != (byte)'F' || raw[2] != (byte)'D' || raw[3] != (byte)'T')
+            {
+                throw new GameDataException("구운 파일이 아니다 — 매직이 OFDT 가 아니다");
+            }
+
+            if (raw[4] != FormatVersion)
+            {
+                throw new GameDataException(
+                    "모르는 형식판이다 : " + raw[4] + " (이 코드가 아는 것 : " + FormatVersion + ")");
+            }
+
+            byte flags = raw[5];
+            if ((flags & FlagEncrypted) != 0)
+            {
+                throw new GameDataException("암호화된 파일이다 — 암호화는 2차 기능이라 아직 못 읽는다");
+            }
+
+            if ((flags & FlagCompressed) != 0)
+            {
+                throw new GameDataException("압축된 파일이다 — 압축은 2차 기능이라 아직 못 읽는다");
+            }
+
+            if (flags != 0)
+            {
+                throw new GameDataException("모르는 플래그가 섰다 : 0x" + flags.ToString("x2"));
+            }
+
+            uint bodyLength = (uint)raw[8]
+                | ((uint)raw[9] << 8)
+                | ((uint)raw[10] << 16)
+                | ((uint)raw[11] << 24);
+
+            long have = raw.Length - HeaderSize;
+            if (bodyLength != have)
+            {
+                throw new GameDataException(
+                    "본문 길이가 안 맞다 — 머리는 " + bodyLength + "바이트라는데 실제는 " + have + "바이트다");
+            }
+
+            return new ReadOnlyMemory<byte>(raw, HeaderSize, (int)bodyLength);
+        }
+    }
+}

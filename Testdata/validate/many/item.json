@@ -1,0 +1,10 @@
+[
+{"id":"sword_iron","name":"철검","atk":12,"price":300},
+{"id":"sword_steel","name":"강철검","atk":24,"price":900,"grade":"rare"},
+{"id":"bow_short","name":"단궁","atk":9,"price":250},
+{"id":"potion_hp","name":"체력 물약","price":50,"usable":true},
+{"id":"potion_mp","name":"마나 물약","price":60,"usable":true},
+{"id":"gem_fire","name":"불의 보석","price":1200,"grade":"epic"},
+{"id":"Bad_Id","name":"나쁜 이름","atk":"12","grade":"legend","atkk":1},
+{"id":"no_name","atk":-5,"tags":[1]}
+]

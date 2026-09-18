@@ -1,0 +1,3 @@
+{ "version": 1,
+  "tables": [
+    { "name": "item", "columns": [ { "name": "id", "type": "string" } ] } ] }
