@@ -80,6 +80,12 @@ func checkColumnDefault(c *collector, f *File, col *Column) {
 		return
 	}
 	where := col.where + ".default"
+	// null 은 값이 아니다. encoding/json 은 null 을 어느 타입에 넣어도 오류를 안 내므로 먼저 막는다
+	// — 그냥 두면 스키마 검사는 통과하고 굽는 자리에서 행마다 오류가 난다.
+	if isNullValue(col.Default) {
+		c.add(where, "기본값이 null 이다 (null 은 값이 아니다 — 칸을 빼거나 값을 적는다)")
+		return
+	}
 	if col.IsList {
 		var items []json.RawMessage
 		if err := json.Unmarshal(col.Default, &items); err != nil {
@@ -96,6 +102,10 @@ func checkColumnDefault(c *collector, f *File, col *Column) {
 
 // checkValueType 은 값 하나가 열의 원소 타입과 맞는지 본다.
 func checkValueType(c *collector, where string, f *File, col *Column, raw json.RawMessage) {
+	if isNullValue(raw) { // 배열 안의 null 도 값이 아니다 (checkColumnDefault 와 같은 판단이다)
+		c.add(where, "null 은 값이 아니다")
+		return
+	}
 	switch col.Base {
 	case TypeInt:
 		checkInt(c, where, raw)
@@ -144,6 +154,11 @@ func checkEnumValue(c *collector, where string, f *File, col *Column, raw json.R
 		c.add(where, fmt.Sprintf("enum %s 에 없는 값이다: %q (있는 것: %s)",
 			col.Enum, v, strings.Join(values, ", ")))
 	}
+}
+
+// isNullValue 는 값이 JSON null 인지 본다. 굽는 쪽(bake.isNull)과 같은 판단이다.
+func isNullValue(raw json.RawMessage) bool {
+	return strings.TrimSpace(string(raw)) == "null"
 }
 
 func listOr(items []string, empty string) string {

@@ -32,6 +32,10 @@ const MaxPerTable = 100
 // idForm 은 id 로 쓸 수 있는 꼴이다 (설계 6장 V7).
 var idForm = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
+// intForm 은 int 열에 적을 수 있는 글자 꼴이다. 굽는 쪽(bake.toInt)이 받는 꼴과 같다 —
+// `12` 는 되고 `12.0`·`1e3` 은 안 된다.
+var intForm = regexp.MustCompile(`^-?[0-9]+$`)
+
 // Run 은 데이터 전부를 검사해 문제를 모아 준다. 문제가 없으면 빈 조각이다.
 //
 // 첫 오류에서 안 멈춘다 — 한 번에 다 고치게 하려는 것이다.
@@ -47,6 +51,27 @@ func Run(sch *schema.File, tables map[string]*table.Table) []*Problem {
 		}
 		c := &checker{sch: sch, st: sch.Table(name), t: t, ids: index}
 		c.checkTable()
+		sortProblems(c.list, columnOrder(c.st))
+		problems = append(problems, cut(c.list, t)...)
+	}
+	return problems
+}
+
+// UnknownColumns 는 「스키마에 없는 열」(V2) 하나만 골라 본다.
+//
+// `fmt` 가 쓰기 전에 부른다 — Format 은 스키마에 없는 열을 안 적으므로, 오타 난 열이 있는 채로
+// 다시 쓰면 그 값이 파일에서 영영 사라진다. 나머지 규칙은 안 돌린다 (fmt 는 검증 명령이 아니다).
+func UnknownColumns(sch *schema.File, tables map[string]*table.Table) []*Problem {
+	problems := []*Problem{}
+	for _, name := range sch.TableNames() {
+		t := tables[name]
+		if t == nil {
+			continue
+		}
+		c := &checker{sch: sch, st: sch.Table(name), t: t}
+		for _, row := range t.Rows {
+			c.checkUnknownColumns(row)
+		}
 		sortProblems(c.list, columnOrder(c.st))
 		problems = append(problems, cut(c.list, t)...)
 	}
@@ -133,9 +158,12 @@ func (c *checker) add(row *table.Row, column, rule, message string) {
 
 // checkID 는 id 가 유일한지·꼴이 맞는지 본다 (V7).
 // id 가 없거나 문자열이 아닌 것은 checkColumns 가 알리므로 여기서 또 말하지 않는다.
+//
+// 다만 **빈 문자열 id 는 여기서 잡는다.** 값이 있으니 필수 검사(V2)에 안 걸리는데
+// 여기서도 넘기면 빈 id 가 여럿이어도 중복으로 안 세어, 구운 파일에서 id 가 겹친다.
 func (c *checker) checkID(row *table.Row, seen map[string]int) {
 	id := row.ID()
-	if id == "" {
+	if id == "" && !hasEmptyID(row) {
 		return
 	}
 	if !idForm.MatchString(id) {
@@ -147,6 +175,16 @@ func (c *checker) checkID(row *table.Row, seen map[string]int) {
 		return
 	}
 	seen[id] = row.Line
+}
+
+// hasEmptyID 는 id 칸이 **빈 문자열로 적혀 있는지** 본다. 칸이 없거나 문자열이 아니면 거짓이다.
+func hasEmptyID(row *table.Row) bool {
+	raw, ok := row.Values["id"]
+	if !ok {
+		return false
+	}
+	v, ok := asString(raw)
+	return ok && v == ""
 }
 
 // checkUnknownColumns 는 스키마에 없는 열을 잡는다 (V2).
@@ -241,6 +279,13 @@ func (c *checker) checkInt(row *table.Row, col *schema.Column, where string, raw
 	}
 	if v != math.Trunc(v) {
 		c.add(row, where, RuleType, fmt.Sprintf("int 열인데 소수다: %s", string(raw)))
+		return
+	}
+	// 12.0 은 값으로는 정수지만 **굽는 쪽(bake)은 정수 글자만 받는다.**
+	// 여기서 안 막으면 validate 는 OK 인데 export 가 터진다.
+	if !intForm.MatchString(strings.TrimSpace(string(raw))) {
+		c.add(row, where, RuleType,
+			fmt.Sprintf("int 열인데 소수 꼴로 적혔다: %s (소수점 없이 적는다)", string(raw)))
 		return
 	}
 	if v < math.MinInt32 || v > math.MaxInt32 {

@@ -235,6 +235,32 @@ func TestNameClashRejected(t *testing.T) {
 	}
 }
 
+// list<enum> 열 이름이 enum 이름과 같으면 속성 GradeNames 가 도우미 클래스를 가린다 (리뷰 D5).
+func TestListEnumColumnHidingNamesClassRejected(t *testing.T) {
+	f := load(t)
+	monster := f.Table("monster")
+	monster.Columns = append(monster.Columns,
+		&schema.Column{Name: "grade", Type: "list<enum>", Base: "enum", Enum: "Grade", IsList: true})
+	if _, err := Generate(f); err == nil {
+		t.Fatal("list<enum> 열 grade 가 GradeNames 클래스를 가리는데 통과했다")
+	}
+}
+
+// enum 값이 같은 C# 이름으로 접히거나 이름표 클래스의 메서드와 겹치면 막는다 (리뷰 D6).
+func TestEnumValueClashRejected(t *testing.T) {
+	f := load(t)
+	f.Enums["Grade"] = []string{"foo_bar", "foo__bar"}
+	if _, err := Generate(f); err == nil {
+		t.Fatal("foo_bar 와 foo__bar 가 둘 다 FooBar 인데 통과했다")
+	}
+
+	f = load(t)
+	f.Enums["Grade"] = []string{"parse", "common"}
+	if _, err := Generate(f); err == nil {
+		t.Fatal("enum 값 parse 가 Parse 메서드와 겹치는데 통과했다")
+	}
+}
+
 func TestGenerateRejectsEmptyNamespace(t *testing.T) {
 	f := load(t)
 	f.Namespace = ""

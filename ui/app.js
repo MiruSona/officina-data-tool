@@ -208,7 +208,7 @@ function toGrid(rows, columns) {
   return rows.map((row) => {
     const out = Object.assign({}, row);
     lists.forEach((name) => {
-      if (Array.isArray(out[name])) out[name] = out[name].join(", ");
+      if (Array.isArray(out[name])) out[name] = listText(out[name]);
     });
     return out;
   });
@@ -258,8 +258,28 @@ function boolValue(value) {
   return value;
 }
 
+// listText 는 배열을 칸에 보일 글자로 만든다.
+//
+// 보통은 쉼표로 잇는다. 다만 **쉼표를 품은 원소**나 앞뒤 공백이 있는 원소가 하나라도 있으면
+// 쉼표로 이었다가 다시 쪼갤 때 원소가 쪼개져 버리므로 JSON 배열 글자 그대로 보인다.
+// 안 건드린 칸의 값이 저장할 때 바뀌는 일을 막는 자리다.
+function listText(items) {
+  const risky = items.some((v) => typeof v === "string" && (v.includes(",") || v.trim() !== v || v === ""));
+  return risky ? JSON.stringify(items) : items.join(", ");
+}
+
 function listValue(value, base) {
   if (Array.isArray(value)) return value;
+  const text = String(value).trim();
+  // listText 가 JSON 으로 내보낸 칸은 JSON 으로 되읽는다. 사람이 직접 적어도 된다.
+  if (text.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(text);
+      if (Array.isArray(parsed)) return parsed;
+    } catch (e) {
+      return value; // 깨진 JSON 은 고쳐 주지 않는다 — 그대로 보내 validate 가 잡게 둔다
+    }
+  }
   const parts = String(value).split(",").map((s) => s.trim()).filter((s) => s !== "");
   if (base === "int" || base === "float") {
     return parts.map((s) => (Number.isNaN(Number(s)) ? s : Number(s)));

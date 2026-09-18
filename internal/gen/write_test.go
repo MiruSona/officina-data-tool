@@ -72,3 +72,32 @@ func TestWriteRejectsBadNames(t *testing.T) {
 		}
 	}
 }
+
+// 덮어쓰기는 한 걸음이어야 한다 — 먼저 지우고 이름을 바꾸면 이름 바꾸기가 실패할 때 옛 파일까지 없어진다 (리뷰 D10).
+func TestWriteOverwritesInOneStep(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ItemRow.cs")
+	if err := os.WriteFile(path, []byte("// 옛 내용\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := writeOne(path, "// 새 내용\n"); err != nil {
+		t.Fatalf("덮어쓰기 실패 : %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("덮어쓴 파일을 못 읽었다 : %v", err)
+	}
+	if string(got) != "// 새 내용\n" {
+		t.Errorf("내용이 다르다 : %q", string(got))
+	}
+
+	// 쓰다 실패해도 옛 파일은 남아 있어야 한다 (폴더를 못 쓰게 만들어 흉내낸다).
+	sub := filepath.Join(dir, "없는폴더", "ItemRow.cs")
+	if err := writeOne(sub, "// 어디에도 못 쓴다\n"); err == nil {
+		t.Fatal("없는 폴더에 썼는데 통과했다")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("실패한 쓰기가 다른 파일을 건드렸다 : %v", err)
+	}
+}

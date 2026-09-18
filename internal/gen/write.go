@@ -77,8 +77,8 @@ func writeOne(path string, content string) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("생성 파일을 닫지 못했다 (%s) : %w", path, err)
 	}
-	// 윈도에서는 이름 바꾸기가 기존 파일을 덮지 못할 때가 있어 먼저 치운다.
-	_ = os.Remove(path)
+	// 먼저 지우지 않는다 — Go 의 os.Rename 은 윈도에서도 기존 파일을 덮는다.
+	// 지우고 나서 이름 바꾸기가 실패하면 **옛 파일까지 없어진다** (덮어쓰기는 한 걸음이어야 한다).
 	if err := os.Rename(tmpPath, path); err != nil {
 		return fmt.Errorf("생성 파일 이름을 바꾸지 못했다 (%s) : %w", path, err)
 	}

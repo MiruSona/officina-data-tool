@@ -17,7 +17,8 @@ import (
 //	③ 열 차례는 스키마 차례
 //	④ 기본값과 같은 값은 열을 뺀다
 //
-// 스키마에 없는 열은 안 적는다. 그런 열이 있다는 것은 validate 가 알린다.
+// 스키마에 없는 열은 안 적는다. 그런 열이 있는 채로 이것을 부르면 값이 사라지므로,
+// 부르는 쪽(`fmt`·`serve`)이 먼저 그런 열이 없는지 보고 온다.
 func (t *Table) Format(st *schema.Table) ([]byte, error) {
 	var b bytes.Buffer
 	b.WriteString("[\n")

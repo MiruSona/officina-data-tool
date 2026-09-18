@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -101,6 +102,30 @@ func TestFmtExitCodes(t *testing.T) {
 
 	if code := run([]string{"fmt", "--data", okDataDir, "--nope", "--json"}); code != exitUsage {
 		t.Fatalf("모르는 인자인데 종료 %d 다", code)
+	}
+}
+
+// 스키마에 없는 열(오타)이 있으면 fmt 는 한 글자도 안 쓰고 종료 2 다 (리뷰 D1).
+// Format 은 그런 열을 안 적으므로, 그냥 다시 쓰면 오타 난 열의 값이 영영 사라진다.
+func TestFmtRefusesUnknownColumn(t *testing.T) {
+	dir := copyDir(t, okDataDir)
+	path := filepath.Join(dir, "item.json")
+	before := mustRead(t, path)
+	if err := os.WriteFile(path, []byte(strings.Replace(before,
+		`{"id":"sword_iron","name":"철검","atk":12`,
+		`{"id":"sword_iron","name":"철검","atkk":12`, 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	messed := mustRead(t, path)
+	if messed == before {
+		t.Fatal("시험 자료를 못 고쳤다")
+	}
+
+	if code := run([]string{"fmt", "--data", dir}); code != exitData {
+		t.Fatalf("스키마에 없는 열인데 종료 %d 다", code)
+	}
+	if got := mustRead(t, path); got != messed {
+		t.Fatalf("막았는데 파일을 고쳤다: %s", got)
 	}
 }
 

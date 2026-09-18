@@ -76,13 +76,15 @@ func TestBrokenSchemas(t *testing.T) {
 		"missing-ref-table":         "tables[0].columns[1].ref",
 		"duplicate-column":          "tables[0].columns[2].name",
 		"default-type-mismatch":     "tables[0].columns[1].default",
-		"enum-value-not-in-list":    "tables[0].columns[1].default",
-		"min-greater-than-max":      "tables[0].columns[1]",
-		"bounds-on-string":          "tables[0].columns[1]",
-		"loc-on-int":                "tables[0].columns[1].loc",
-		"bad-table-name":            "tables[0].name",
-		"duplicate-table":           "tables[1].name",
-		"no-namespace":              "namespace",
+		// null 은 값이 아니다 — 여기서 안 막으면 굽는 자리에서 행마다 오류가 난다 (리뷰 D4).
+		"default-null":           "tables[0].columns[1].default",
+		"enum-value-not-in-list": "tables[0].columns[1].default",
+		"min-greater-than-max":   "tables[0].columns[1]",
+		"bounds-on-string":       "tables[0].columns[1]",
+		"loc-on-int":             "tables[0].columns[1].loc",
+		"bad-table-name":         "tables[0].name",
+		"duplicate-table":        "tables[1].name",
+		"no-namespace":           "namespace",
 	}
 
 	for name, where := range cases {

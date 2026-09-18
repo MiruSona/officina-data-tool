@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 
 	"github.com/mirusona/officina-data-tool/internal/gen"
 )
@@ -35,13 +34,12 @@ func cmdGen(opts options, rest []string) int {
 		return reportProblems(opts, tables, code, err)
 	}
 
+	// 네임스페이스는 gen.Generate 안에서 이미 박힌다 — 생성 .cs 는 스키마의 namespace 로 태어나고,
+	// 손으로 쓴 Unity 셋은 runtimeFiles 가 ReplaceNamespace 로 갈아 끼우며 「Officina. 잔여 0」을 센다.
+	// 여기서 또 치환하면 `Studio.Officina.Data` 같은 이름이 두 번 갈려 망가진다.
 	files, err := gen.Generate(sch)
 	if err != nil {
 		return fail(opts, exitSchema, err.Error())
-	}
-	files, err = applyNamespace(files, sch.Namespace)
-	if err != nil {
-		return fail(opts, exitWriteFail, err.Error())
 	}
 
 	out = root.outPath(out, root.cfg.Gen, defaultGenDir)
@@ -50,26 +48,6 @@ func cmdGen(opts options, rest []string) int {
 		return fail(opts, exitWriteFail, err.Error())
 	}
 	return reportGen(opts, out, files, stale)
-}
-
-// applyNamespace 는 생성 내용에 남은 템플릿 네임스페이스를 갈아 끼운다.
-//
-// 생성 파일은 스키마의 namespace 를 박고 태어나므로 보통은 바꿀 것이 없다. 그래도 한 번
-// 통과시키는 이유는 **`Officina.` 잔여를 0 으로 세려는 것**이다 (설계 8장).
-// 다만 스키마의 namespace 자체가 `Officina.` 로 시작하면 그 글자가 잔여로 보이니 건너뛴다.
-func applyNamespace(files map[string]string, ns string) (map[string]string, error) {
-	if strings.HasPrefix(strings.TrimSpace(ns), "Officina.") {
-		return files, nil
-	}
-	out := make(map[string]string, len(files))
-	for name, src := range files {
-		replaced, err := gen.ReplaceNamespace(src, ns)
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", name, err)
-		}
-		out[name] = replaced
-	}
-	return out, nil
 }
 
 func reportGen(opts options, dir string, files map[string]string, stale []string) int {

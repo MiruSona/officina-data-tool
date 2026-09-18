@@ -7,6 +7,7 @@ import (
 
 	"github.com/mirusona/officina-data-tool/internal/schema"
 	"github.com/mirusona/officina-data-tool/internal/table"
+	"github.com/mirusona/officina-data-tool/internal/validate"
 )
 
 // cmdFmt 는 데이터 JSON 을 설계 3장의 규칙대로 다시 쓴다.
@@ -35,6 +36,13 @@ func cmdFmt(opts options, rest []string) int {
 	tables, err := table.LoadAll(dir, sch)
 	if err != nil {
 		return failLoad(opts, err)
+	}
+
+	// 다시 쓰기 전에 **스키마에 없는 열부터** 본다 (설계 3장의 규칙대로 적으면 그 열은 안 적히므로,
+	// 오타 난 열이 있는 채로 fmt 를 돌리면 그 값이 영영 사라진다). 나머지 규칙은 validate 몫이다.
+	if problems := validate.UnknownColumns(sch, tables); len(problems) > 0 {
+		validate.Relativize(problems, dir)
+		return reportProblems(opts, tables, exitData, &problemsError{problems: problems})
 	}
 
 	changed, err := formatTables(sch, tables, check)

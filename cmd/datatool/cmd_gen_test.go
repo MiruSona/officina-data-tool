@@ -98,3 +98,50 @@ func TestGenStopsOnInvalidData(t *testing.T) {
 		t.Fatalf("검증에 걸렸는데 %d장을 썼다", len(entries))
 	}
 }
+
+// schemaWith 는 ok 자료를 임시 폴더에 깔고 schema.json 만 손본다.
+func schemaWith(t *testing.T, replace func(string) string) string {
+	t.Helper()
+	dir := copyDir(t, okDataDir)
+	path := filepath.Join(dir, "schema.json")
+	if err := os.WriteFile(path, []byte(replace(mustRead(t, path))), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// 네임스페이스에 Officina. 이 들어 있어도 한 번만 박힌다 (리뷰 D7).
+// 예전에는 생성 뒤에 한 번 더 치환해서 Studio.Studio.Officina.Data 가 나왔다.
+func TestGenNamespaceContainingOfficina(t *testing.T) {
+	dir := schemaWith(t, func(src string) string {
+		return strings.Replace(src, `"namespace": "MyGame.Data"`, `"namespace": "Studio.Officina.Data"`, 1)
+	})
+	out := filepath.Join(t.TempDir(), "Generated")
+	if code := run([]string{"gen", "--data", dir, "--out", out}); code != exitOK {
+		t.Fatalf("gen 이 종료 0 이 아니다: %d", code)
+	}
+	for _, name := range []string{"ItemRow.cs", "GameDataLoader.cs", "Studio.Officina.Data.asmdef"} {
+		got := mustRead(t, filepath.Join(out, name))
+		if strings.Contains(got, "Studio.Studio") {
+			t.Errorf("%s 에 이중 치환이 났다", name)
+		}
+		if !strings.Contains(got, "Studio.Officina.Data") {
+			t.Errorf("%s 에 네임스페이스가 안 박혔다", name)
+		}
+	}
+}
+
+// 열 설명에 Officina. 이 들어 있어도 막히지 않는다 (리뷰 D7). 설명은 주석일 뿐이다.
+func TestGenAllowsOfficinaInDesc(t *testing.T) {
+	dir := schemaWith(t, func(src string) string {
+		return strings.Replace(src, `{ "name": "atk",    "type": "int",`,
+			`{ "name": "atk",    "type": "int", "desc": "Officina.Hubs 의 공격력과 같다",`, 1)
+	})
+	out := filepath.Join(t.TempDir(), "Generated")
+	if code := run([]string{"gen", "--data", dir, "--out", out}); code != exitOK {
+		t.Fatalf("설명에 Officina. 이 있다고 막혔다: 종료 %d", code)
+	}
+	if !strings.Contains(mustRead(t, filepath.Join(out, "ItemRow.cs")), "Officina.Hubs") {
+		t.Error("열 설명이 주석으로 안 나왔다")
+	}
+}

@@ -63,16 +63,49 @@ func sortedEnumNames(f *schema.File) []string {
 // `DroprateRow.cs` 로 나오는데 **Windows 파일 시스템은 대소문자를 안 가려서 하나가 다른 하나를 덮는다.**
 // 컴파일이 깨지거나 파일이 조용히 사라지기 전에 여기서 잡는다.
 func checkNameClashes(f *schema.File) error {
+	if err := checkEnumValueClashes(f); err != nil {
+		return err
+	}
 	if err := checkColumnClashes(f); err != nil {
 		return err
 	}
 	return checkGlobalClashes(f)
 }
 
+// checkEnumValueClashes 는 한 enum 안에서 값 둘이 같은 C# 이름이 되는지 본다.
+//
+// `foo_bar` 와 `foo__bar` 는 둘 다 `FooBar` 가 된다 — enum 멤버도 const 도 두 번 나와 컴파일이 깨진다.
+// 이름표 클래스의 붙박이 메서드(Parse·ToName·ParseAll)와 겹치는 값도 같은 자리에서 막는다.
+func checkEnumValueClashes(f *schema.File) error {
+	for _, name := range sortedEnumNames(f) {
+		p := newPot("enum " + name + " 의 C# 이름")
+		for _, fixed := range []string{"Parse", "ToName", "ParseAll"} {
+			if err := p.put(fixed, "이름표 클래스의 붙박이 메서드 "+fixed); err != nil {
+				return err
+			}
+		}
+		for _, v := range f.Enums[name] {
+			if err := p.put(pascal(v), "값 "+v); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // checkColumnClashes 는 한 표 안에서 열 둘이 같은 속성 이름이 되는지 본다.
+//
+// 행 클래스 **안에서 부르는 이름표 클래스**도 같이 담는다. `list<enum>` 열 이름이 enum 이름과 같으면
+// 속성이 `GradeNames` 로 나서 같은 이름의 도우미 클래스를 가리고, `GradeNames.ParseAll(GradeNames)`
+// 가 컴파일이 안 된다.
 func checkColumnClashes(f *schema.File) error {
 	for _, t := range f.Tables {
 		taken := make(map[string]string)
+		for _, c := range t.Columns {
+			if c.Base == schema.TypeEnum {
+				taken[enumNamesClass(c.Enum)] = "enum " + c.Enum + " 의 이름표 클래스"
+			}
+		}
 		for _, c := range t.Columns {
 			used := []string{serializedProperty(c.Name, c.Base == schema.TypeEnum, c.IsList)}
 			if c.Base == schema.TypeEnum {
@@ -80,9 +113,9 @@ func checkColumnClashes(f *schema.File) error {
 			}
 			for _, name := range used {
 				if before, ok := taken[name]; ok {
-					return fmt.Errorf("표 %s: 열 %s 와 %s 가 둘 다 C# 속성 %s 가 된다", t.Name, before, c.Name, name)
+					return fmt.Errorf("표 %s: %s 와 열 %s 가 둘 다 C# 이름 %s 가 된다", t.Name, before, c.Name, name)
 				}
-				taken[name] = c.Name
+				taken[name] = "열 " + c.Name
 			}
 		}
 	}

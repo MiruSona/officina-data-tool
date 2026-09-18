@@ -109,6 +109,16 @@ func TestRules(t *testing.T) {
 			{"item.json", 4, "atk", validate.RuleType},
 			{"item.json", 5, "tags", validate.RuleList},
 		}},
+		// 12.0 은 값으로는 정수지만 굽는 쪽이 안 받는다 — 여기서 막아야 validate OK·export 실패가 없다 (리뷰 D3).
+		{"v3-int-form", []want{
+			{"item.json", 2, "atk", validate.RuleType},
+		}},
+		// 빈 문자열 id — 값이 있어 필수 검사에 안 걸리므로 여기서 꼴·중복을 본다 (리뷰 D2).
+		{"v7-empty-id", []want{
+			{"item.json", 8, "id", validate.RuleIDForm},
+			{"item.json", 9, "id", validate.RuleIDForm},
+			{"item.json", 9, "id", validate.RuleDupID},
+		}},
 		// float64 로는 멀쩡해도 float32 로 못 담는 수 (리뷰 F).
 		{"v3-float32", []want{
 			{"item.json", 2, "price", validate.RuleType},
