@@ -31,6 +31,11 @@ GameData/schema.json + item.json · monster.json · drop.json
 
 Go 1.26 이상이 필요하다. DataTool 폴더 안에서 친다.
 
+**소스를 받은 뒤에는(서브모듈 갱신 포함) `.\build.ps1` 로 다시 빌드한다.**
+`bin` 은 git 에 안 올라가서, 소스만 새것이고 실행 파일은 옛 판으로 남는다.
+지금 실행 파일이 어느 판인지는 `datatool version` 이 알려준다 (커밋·빌드 시각).
+커밋 뒤에 소스를 손댄 채로 빌드했으면 커밋 뒤에 `-dirty` 가 붙는다.
+
 ## 빨리 써 보기
 
 ```powershell
@@ -55,7 +60,7 @@ datatool <명령> [--data DIR] [--json] [옵션…]
 | `export` | `gamedata.bytes` 를 굽는다. **먼저 validate** | **쓴다** — `--out` 자리 하나 |
 | `gen` | C# 을 만든다 (`<표>Row.cs` · `<enum>.cs` · `GameDataTables.cs`) **+ `Unity/` 의 로더 셋을 네임스페이스 치환해 같이 낸다**. **먼저 validate** | **쓴다** — 생성 폴더 안만 |
 | `serve` | 표 편집 UI 를 `127.0.0.1` 에만 띄운다. 저장은 행 배열을 엔진에 넘겨 검증 뒤 파일을 다시 쓴다 | **쓴다** — UI 가 저장할 때만 |
-| `version` | 판과 빌드 시각 | 안 쓴다 |
+| `version` | 판·빌드한 커밋·빌드 시각 | 안 쓴다 |
 
 전역 옵션은 둘뿐이다.
 
