@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <!-- 골든 코드는 Unity(널 가능 참조 없음) 를 겨냥해 쓴 것이라 끈다. -->
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <RootNamespace>DataTool.Roundtrip</RootNamespace>
+    <AssemblyName>Roundtrip</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MessagePack" Version="3.1.9" />
+  </ItemGroup>
+
+  <!--
+    골든 한 벌을 그대로 링크해서 컴파일한다 (복사하지 않는다).
+    datatool gen 이 로더(GameDataLoader·GameDataException)까지 네임스페이스를 맞춰 같이 내므로
+    여기서 따로 손볼 것이 없다. .asmdef 는 Unity 것이라 컴파일에 안 들어간다.
+  -->
+  <ItemGroup>
+    <Compile Include="../gen/expected/*.cs" LinkBase="Generated" />
+  </ItemGroup>
+
+</Project>
