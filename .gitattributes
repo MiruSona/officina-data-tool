@@ -1,0 +1,3 @@
+# 시험 golden 과 go:embed 파일은 바이트로 견준다. Windows autocrlf 가 CRLF 로 바꾸면 시험이 깨진다.
+Testdata/** text eol=lf
+Unity/** text eol=lf
