@@ -1,0 +1,4 @@
+[
+{"id":"sword","icon":"icons[icon_sword]","sfx":["Sfx/hit.wav"]},
+{"id":"hero","icon":"hero_art","any":"Hero"}
+]

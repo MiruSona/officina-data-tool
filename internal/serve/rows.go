@@ -137,6 +137,9 @@ func columnsJSON(t *schema.Table) []map[string]any {
 		if c.Ref != "" {
 			one["ref"] = c.Ref
 		}
+		if c.Kind != "" {
+			one["kind"] = c.Kind
+		}
 		cols = append(cols, one)
 	}
 	return cols

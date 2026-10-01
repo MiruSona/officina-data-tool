@@ -113,6 +113,11 @@ namespace DataTool.Roundtrip
             MonsterRow blue = t.Monster["slime_blue"];
             Dump("  slime_blue", "name=" + blue.Name + " hp=" + blue.Hp + " element=" + blue.Element);
             Check("slime_blue.Element (적힌 enum)", blue.Element, Element.Ice);
+            Check("monster[0].Icon (asset 문자열)", first.Icon, "icons[icon_sword]");
+            Check("monster[0].Sfx 길이 (list<asset>)", first.Sfx.Length, 1);
+            Check("monster[0].Sfx[0]", first.Sfx[0], "Sfx/hit.wav");
+            Check("slime_blue.Icon (asset 기본값 빈 문자열)", blue.Icon, "");
+            Check("slime_blue.Sfx (기본값 빈 배열)", blue.Sfx.Length, 0);
             Check("golem_fire.Hp", t.Monster["golem_fire"].Hp, 900);
             Check("golem_fire.Name", t.Monster["golem_fire"].Name, "불의 골렘");
         }

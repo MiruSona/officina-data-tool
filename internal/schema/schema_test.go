@@ -2,6 +2,7 @@ package schema_test
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -85,6 +86,10 @@ func TestBrokenSchemas(t *testing.T) {
 		"bad-table-name":         "tables[0].name",
 		"duplicate-table":        "tables[1].name",
 		"no-namespace":           "namespace",
+		// A1. kind 는 asset 열에만, 값은 계약의 다섯 중 하나. asset 기본값도 타입을 본다.
+		"kind-on-int":        "tables[0].columns[1].kind",
+		"unknown-kind":       "tables[0].columns[1].kind",
+		"asset-default-type": "tables[0].columns[1].default",
 	}
 
 	for name, where := range cases {
@@ -202,5 +207,41 @@ func TestLoadSchemaWithBOM(t *testing.T) {
 	}
 	if f.Namespace != "MyGame.Data" {
 		t.Fatalf("namespace 가 %q 다", f.Namespace)
+	}
+}
+
+// A1. asset · list<asset> · kind 를 읽는다. kind 없는 asset 열도 된다.
+func TestAssetColumns(t *testing.T) {
+	f := mustParse(t, `{"version":1,"namespace":"My.Data","tables":[{"name":"item","columns":[
+		{"name":"id","type":"string"},
+		{"name":"icon","type":"asset","kind":"image","default":""},
+		{"name":"sfx","type":"list<asset>","kind":"audio","default":["Sfx/hit.wav"]},
+		{"name":"any","type":"asset"}]}]}`)
+	item := f.Table("item")
+	icon := item.Column("icon")
+	if icon.Base != schema.TypeAsset || icon.Kind != "image" || icon.IsList {
+		t.Fatalf("asset 열을 못 풀었다: %+v", icon)
+	}
+	sfx := item.Column("sfx")
+	if !sfx.IsList || sfx.Base != schema.TypeAsset || sfx.Kind != "audio" {
+		t.Fatalf("list<asset> 를 못 풀었다: %+v", sfx)
+	}
+	if item.Column("any").Kind != "" || !item.Column("any").Required() {
+		t.Fatal("kind 없는 asset 열은 아무 종류나 받는 필수 열이어야 한다")
+	}
+}
+
+// A1. kind 는 런타임 꼴을 안 바꾸니 schemaHash 에 안 들어간다.
+func TestKindNotInHash(t *testing.T) {
+	src := `{"version":1,"namespace":"My.Data","tables":[{"name":"item","columns":[
+		{"name":"id","type":"string"},{"name":"icon","type":"asset"%s}]}]}`
+	plain := mustParse(t, fmt.Sprintf(src, ""))
+	kinded := mustParse(t, fmt.Sprintf(src, `,"kind":"image"`))
+	if plain.Hash() != kinded.Hash() {
+		t.Fatalf("kind 를 달았더니 해시가 바뀌었다: %s vs %s", plain.Hash(), kinded.Hash())
+	}
+	asString := mustParse(t, strings.Replace(fmt.Sprintf(src, ""), `"asset"`, `"string"`, 1))
+	if asString.Hash() == plain.Hash() {
+		t.Fatal("타입이 string 에서 asset 으로 바뀌었는데 해시가 그대로다")
 	}
 }

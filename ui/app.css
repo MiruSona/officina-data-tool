@@ -236,6 +236,7 @@ button { font: inherit; color: inherit; }
 }
 
 .problems .row:hover { background: var(--danger-soft); }
+.problems .row.warn .what { color: var(--warn); }
 
 .problems .where {
   font-family: var(--mono);
@@ -344,3 +345,49 @@ button { font: inherit; color: inherit; }
   .tables button { width: auto; white-space: nowrap; border: 1px solid var(--line); }
   .problems { max-height: 40vh; }
 }
+
+/* asset 칸 (연동 설계 3-4) ------------------------------------------- */
+
+.assetbar {
+  margin: 0;
+  padding: 6px 16px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+  color: var(--warn);
+  font-size: 13px;
+}
+.assetbar.bad { color: var(--danger); }
+
+.tabulator .asset { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.tabulator .asset-thumb {
+  display: inline-block;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  background-repeat: no-repeat;
+  background-color: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  image-rendering: pixelated;
+}
+.tabulator .asset-play {
+  flex: none;
+  width: 26px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface);
+  cursor: pointer;
+}
+.tabulator .asset-play:hover { border-color: var(--accent); }
+.tabulator .asset-name { overflow: hidden; text-overflow: ellipsis; }
+.tabulator .kindtag {
+  flex: none;
+  padding: 0 5px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.tabulator .asset-missing .asset-name { color: var(--danger); text-decoration: underline dotted; }

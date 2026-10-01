@@ -1,0 +1,5 @@
+{ "version": 1, "namespace": "MyGame.Data",
+  "tables": [
+    { "name": "item", "columns": [
+      { "name": "id",   "type": "string" },
+      { "name": "icon", "type": "asset", "kind": "sprite" } ] } ] }

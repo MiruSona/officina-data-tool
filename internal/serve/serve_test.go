@@ -31,7 +31,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *Server, string) {
 			t.Fatal(err)
 		}
 	}
-	server, err := New(dir)
+	server, err := New(dir, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestPutWritesFormatted(t *testing.T) {
 	before, _ := os.ReadFile(path)
 
 	// 열 차례를 일부러 섞고 기본값(hp 는 기본값이 없으니 element)을 넣어 보낸다.
-	rows := `[{"name":"초록 슬라임","id":"slime_green","hp":30},
+	rows := `[{"name":"초록 슬라임","sfx":["Sfx/hit.wav"],"id":"slime_green","hp":30,"icon":"icons[icon_sword]"},
 	{"id":"slime_blue","name":"파랑 슬라임","hp":45,"element":"ice"},
 	{"id":"wolf_gray","name":"잿빛 늑대","hp":120},
 	{"id":"golem_fire","name":"불의 골렘","hp":900}]`

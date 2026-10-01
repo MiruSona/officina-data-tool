@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"math"
 	"strings"
+
+	"github.com/mirusona/officina-data-tool/internal/assetindex"
 )
 
 // checkReferences 는 열 하나하나가 말이 되는지 본다.
@@ -17,6 +19,7 @@ func checkReferences(c *collector, f *File) {
 			checkColumnRef(c, f, col)
 			checkColumnBounds(c, col)
 			checkColumnLoc(c, col)
+			checkColumnKind(c, col)
 			checkColumnDefault(c, f, col)
 		}
 	}
@@ -75,6 +78,21 @@ func checkColumnLoc(c *collector, col *Column) {
 	}
 }
 
+// checkColumnKind 는 kind 칸이 asset 열에만 있고 값이 계약의 다섯 중 하나인지 본다.
+func checkColumnKind(c *collector, col *Column) {
+	if col.Kind == "" {
+		return
+	}
+	if col.Base != TypeAsset {
+		c.add(col.where+".kind", fmt.Sprintf("kind 는 asset 열에만 쓴다 (타입 %q)", col.Type))
+		return
+	}
+	if !contains(assetindex.Kinds, col.Kind) {
+		c.add(col.where+".kind", fmt.Sprintf("모르는 kind 다: %q (쓸 수 있는 것: %s)",
+			col.Kind, strings.Join(assetindex.Kinds, ", ")))
+	}
+}
+
 func checkColumnDefault(c *collector, f *File, col *Column) {
 	if col.Default == nil {
 		return
@@ -119,7 +137,7 @@ func checkValueType(c *collector, where string, f *File, col *Column, raw json.R
 		if err := json.Unmarshal(raw, &v); err != nil {
 			c.add(where, "참거짓이 와야 한다")
 		}
-	case TypeString, TypeRef:
+	case TypeString, TypeRef, TypeAsset:
 		var v string
 		if err := json.Unmarshal(raw, &v); err != nil {
 			c.add(where, "문자열이 와야 한다")

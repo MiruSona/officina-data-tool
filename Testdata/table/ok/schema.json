@@ -18,7 +18,9 @@
       { "name": "id",      "type": "string" },
       { "name": "name",    "type": "string", "loc": true },
       { "name": "hp",      "type": "int",    "min": 1, "max": 999999 },
-      { "name": "element", "type": "enum",   "enum": "Element", "default": "fire" } ] },
+      { "name": "element", "type": "enum",   "enum": "Element", "default": "fire" },
+      { "name": "icon",    "type": "asset",  "kind": "image", "default": "" },
+      { "name": "sfx",     "type": "list<asset>", "kind": "audio", "default": [] } ] },
     { "name": "drop", "columns": [
       { "name": "id",         "type": "string" },
       { "name": "monster_id", "type": "ref",   "ref": "monster" },

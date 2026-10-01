@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/mirusona/officina-data-tool/internal/assetindex"
 	"github.com/mirusona/officina-data-tool/internal/schema"
 	"github.com/mirusona/officina-data-tool/internal/table"
 )
@@ -26,6 +27,7 @@ const MaxPerTable = 100
 //	V6 ref               checkRef
 //	V7 id 중복·꼴         checkID
 //	V9 list<T> 원소       checkList
+//	V10 asset            checkAsset (asset.go)
 //
 // V1(JSON 이 깨졌나)과 V8(파일 이름 = 표 이름)은 table 묶음이 읽을 때 이미 막는다.
 
@@ -41,20 +43,43 @@ var intForm = regexp.MustCompile(`^-?[0-9]+$`)
 // 첫 오류에서 안 멈춘다 — 한 번에 다 고치게 하려는 것이다.
 // tables 는 표 이름 → 읽어 온 표다 (table.LoadAll 이 주는 것 그대로).
 func Run(sch *schema.File, tables map[string]*table.Table) []*Problem {
+	problems, _ := RunWithIndex(sch, tables, nil)
+	return problems
+}
+
+// RunWithIndex 는 Run 에 V10 을 더한다. assets 가 nil 이면 V10 을 건너뛴다.
+// 경고는 오류와 따로 준다 — 경고만 있으면 통과다.
+func RunWithIndex(sch *schema.File, tables map[string]*table.Table, assets *assetindex.Index) ([]*Problem, []*Problem) {
+	return RunWith(sch, tables, Options{Assets: assets})
+}
+
+// Options 는 RunWith 의 손잡이다. AssetsAsWarnings 면 V10 오류를 처음부터 경고로 모은다 (serve 저장 때).
+type Options struct {
+	Assets           *assetindex.Index
+	AssetsAsWarnings bool
+}
+
+// RunWith 는 RunWithIndex 에 손잡이를 더한 것이다. 오류와 경고는 따로 자른다.
+func RunWith(sch *schema.File, tables map[string]*table.Table, opt Options) ([]*Problem, []*Problem) {
+	assets := opt.Assets
 	index := buildIDIndex(sch, tables)
 
 	problems := []*Problem{}
+	warnings := []*Problem{}
 	for _, name := range sch.TableNames() {
 		t := tables[name]
 		if t == nil {
 			continue // 파일이 없는 것은 V8 이 이미 막았다
 		}
-		c := &checker{sch: sch, st: sch.Table(name), t: t, ids: index}
+		c := &checker{sch: sch, st: sch.Table(name), t: t, ids: index, assets: assets, assetWarn: opt.AssetsAsWarnings}
 		c.checkTable()
-		sortProblems(c.list, columnOrder(c.st))
+		order := columnOrder(c.st)
+		sortProblems(c.list, order)
+		sortProblems(c.warns, order)
 		problems = append(problems, cut(c.list, t)...)
+		warnings = append(warnings, cut(c.warns, t)...)
 	}
-	return problems
+	return problems, warnings
 }
 
 // UnknownColumns 는 「스키마에 없는 열」(V2) 하나만 골라 본다.
@@ -86,6 +111,11 @@ type checker struct {
 	// 표 이름 → id → 그 id 가 처음 나온 줄. ref 가 가리키는 곳을 찾는 데 쓴다.
 	ids  map[string]map[string]int
 	list []*Problem
+	// V10 색인. nil 이면 V10 을 건너뛴다.
+	assets     *assetindex.Index
+	assetWarn  bool // V10 오류를 경고로 모은다
+	addressSet map[string]int
+	warns      []*Problem
 }
 
 // buildIDIndex 는 표마다 id 목록을 미리 모은다.
@@ -145,7 +175,16 @@ func (c *checker) checkTable() {
 
 // add 는 문제 하나를 모은다. 자리(파일·줄·표·행)는 늘 같은 데서 채운다.
 func (c *checker) add(row *table.Row, column, rule, message string) {
-	c.list = append(c.list, &Problem{
+	c.list = append(c.list, c.problem(row, column, rule, message))
+}
+
+// warn 은 경고 하나를 모은다. 자리는 add 와 같다.
+func (c *checker) warn(row *table.Row, column, rule, message string) {
+	c.warns = append(c.warns, c.problem(row, column, rule, message))
+}
+
+func (c *checker) problem(row *table.Row, column, rule, message string) *Problem {
+	return &Problem{
 		File:    filepath.ToSlash(c.t.Path),
 		Line:    row.Line,
 		Table:   c.t.Name,
@@ -153,7 +192,7 @@ func (c *checker) add(row *table.Row, column, rule, message string) {
 		Column:  column,
 		Rule:    rule,
 		Message: message,
-	})
+	}
 }
 
 // checkID 는 id 가 유일한지·꼴이 맞는지 본다 (V7).
@@ -253,6 +292,8 @@ func (c *checker) checkScalar(row *table.Row, col *schema.Column, where string, 
 		c.checkEnum(row, col, where, raw)
 	case schema.TypeRef:
 		c.checkRef(row, col, where, raw)
+	case schema.TypeAsset:
+		c.checkAsset(row, col, where, raw)
 	}
 }
 

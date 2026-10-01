@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "generator": "assettool 0.1.0 (a1b2c3d)",
+  "generatedAt": "2026-09-23T05:12:00Z",
+  "unityRoot": "../..",
+  "settingsPath": "Assets/AddressableAssetsData/AddressableAssetSettings.asset",
+  "sourceMtime": "2026-09-23T05:10:41.123456789Z",
+  "labels": [
+    "default",
+    "ui"
+  ],
+  "entries": [
+    {
+      "address": "Hero",
+      "guid": "0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+      "path": "Assets/Prefabs/Hero.prefab",
+      "kind": "prefab",
+      "group": "Default Local Group",
+      "includeInBuild": true,
+      "labels": [
+        "default"
+      ]
+    },
+    {
+      "address": "Sfx/hit.wav",
+      "guid": "1234567890abcdef1234567890abcdef",
+      "path": "Assets/Audio/Sfx/hit.wav",
+      "kind": "audio",
+      "group": "Audio",
+      "includeInBuild": true,
+      "labels": [],
+      "fromFolder": "Sfx"
+    },
+    {
+      "address": "icons",
+      "guid": "9a8b7c6d5e4f30211203f4e5d6c7b8a9",
+      "path": "Assets/Art/icons.png",
+      "kind": "image",
+      "group": "UI",
+      "includeInBuild": true,
+      "labels": [
+        "ui"
+      ],
+      "sub": [
+        {
+          "name": "icon_sword",
+          "rect": {
+            "x": 0,
+            "y": 64,
+            "w": 64,
+            "h": 64
+          }
+        },
+        {
+          "name": "icon_potion",
+          "rect": {
+            "x": 64,
+            "y": 64,
+            "w": 64,
+            "h": 64
+          }
+        }
+      ]
+    }
+  ]
+}

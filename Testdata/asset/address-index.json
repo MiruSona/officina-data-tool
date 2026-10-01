@@ -1,0 +1,22 @@
+{"version": 1, "generator": "시험 자료", "generatedAt": "2100-01-01T00:00:00Z", "unityRoot": "../..",
+ "settingsPath": "Assets/AddressableAssetsData/AddressableAssetSettings.asset",
+ "sourceMtime": "2100-01-01T00:00:00Z", "labels": [],
+ "entries": [
+  {"address": "Hero", "guid": "0f1e2d3c4b5a69788796a5b4c3d2e1f0", "path": "Assets/Prefabs/Hero.prefab", "kind": "prefab", "group": "G", "includeInBuild": true, "labels": []},
+  {"address": "Sfx/hit.wav", "guid": "1234567890abcdef1234567890abcdef", "path": "Assets/Audio/Sfx/hit.wav", "kind": "audio", "group": "G", "includeInBuild": true, "labels": [], "fromFolder": "Sfx"},
+  {"address": "icons", "guid": "9a8b7c6d5e4f30211203f4e5d6c7b8a9", "path": "Assets/Art/icons.png", "kind": "image", "group": "G", "includeInBuild": true, "labels": [],
+   "sub": [{"name": "icon_sword", "rect": {"x": 0, "y": 64, "w": 64, "h": 64}}, {"name": "icon_potion", "rect": {"x": 64, "y": 64, "w": 64, "h": 64}}]},
+  {"address": "hero_art", "guid": "a0000000000000000000000000000001", "path": "Assets/Art/hero.psd", "kind": "image", "group": "G", "includeInBuild": true, "labels": []},
+  {"address": "model", "guid": "a0000000000000000000000000000002", "path": "Assets/Models/model.fbx", "kind": "other", "group": "G", "includeInBuild": true, "labels": []},
+  {"address": "unbuilt", "guid": "a0000000000000000000000000000003", "path": "Assets/Art/icons.png", "kind": "image", "group": "Off", "includeInBuild": false, "labels": []},
+  {"address": "pkg_icon", "guid": "a0000000000000000000000000000004", "path": "", "kind": "other", "group": "G", "includeInBuild": true, "labels": []},
+  {"address": "dup", "guid": "a0000000000000000000000000000005", "path": "Assets/Prefabs/Dup.prefab", "kind": "prefab", "group": "G", "includeInBuild": true, "labels": []},
+  {"address": "dup", "guid": "a0000000000000000000000000000006", "path": "Assets/Art/icons.png", "kind": "image", "group": "G", "includeInBuild": true, "labels": []},
+  {"address": "mixed", "guid": "a0000000000000000000000000000007", "path": "", "kind": "other", "group": "G", "includeInBuild": true, "labels": []},
+  {"address": "mixed", "guid": "a0000000000000000000000000000008", "path": "Assets/Prefabs/Mixed.prefab", "kind": "prefab", "group": "G", "includeInBuild": true, "labels": []},
+  {"address": "esc_dotdot", "guid": "b0000000000000000000000000000001", "path": "../../x.png", "kind": "image", "group": "G", "includeInBuild": true, "labels": []},
+  {"address": "esc_inner", "guid": "b0000000000000000000000000000002", "path": "Assets/../../x.png", "kind": "image", "group": "G", "includeInBuild": true, "labels": []},
+  {"address": "esc_abs", "guid": "b0000000000000000000000000000003", "path": "C:/Windows/win.ini", "kind": "other", "group": "G", "includeInBuild": true, "labels": []},
+  {"address": "esc_prefix", "guid": "b0000000000000000000000000000004", "path": "ProjectSettings/x.png", "kind": "image", "group": "G", "includeInBuild": true, "labels": []},
+  {"address": "esc_link", "guid": "b0000000000000000000000000000005", "path": "Assets/Link/secret.png", "kind": "image", "group": "G", "includeInBuild": true, "labels": []}
+ ]}

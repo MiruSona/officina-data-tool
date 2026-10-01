@@ -42,7 +42,7 @@ func cmdFmt(opts options, rest []string) int {
 	// 오타 난 열이 있는 채로 fmt 를 돌리면 그 값이 영영 사라진다). 나머지 규칙은 validate 몫이다.
 	if problems := validate.UnknownColumns(sch, tables); len(problems) > 0 {
 		validate.Relativize(problems, dir)
-		return reportProblems(opts, tables, exitData, &problemsError{problems: problems})
+		return reportProblems(opts, tables, []*validate.Problem{}, exitData, &problemsError{problems: problems})
 	}
 
 	changed, err := formatTables(sch, tables, check)

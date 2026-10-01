@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/mirusona/officina-data-tool/internal/assetindex"
 	"github.com/mirusona/officina-data-tool/internal/schema"
 	"github.com/mirusona/officina-data-tool/internal/table"
 	"github.com/mirusona/officina-data-tool/internal/validate"
@@ -137,9 +138,10 @@ func (s *Server) putTable(w http.ResponseWriter, r *http.Request, name string) {
 		return
 	}
 	tables[name] = t // 참조(ref)는 다른 표까지 봐야 하므로 이 표만 갈아 끼운다
-	if problems := validate.Run(sch, tables); len(problems) > 0 {
+	problems, warnings := s.validateForSave(sch, tables)
+	if len(problems) > 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]any{
-			"ok": false, "error": "검증에 걸려 안 썼다", "problems": problems,
+			"ok": false, "error": "검증에 걸려 안 썼다", "problems": problems, "warnings": warnings,
 		})
 		return
 	}
@@ -155,8 +157,33 @@ func (s *Server) putTable(w http.ResponseWriter, r *http.Request, name string) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "name": name, "rows": len(t.Rows),
-		"path": filepath.ToSlash(filepath.Base(path)),
+		"path":     filepath.ToSlash(filepath.Base(path)),
+		"warnings": warnings,
 	})
+}
+
+// validateForSave 는 저장 때의 검증이다. V10 오류(asset·asset_kind)는 처음부터 경고로 모은다 —
+// 색인이 낡았을 때 새 주소를 먼저 적을 수 있어야 한다. 막는 것은 CLI 뿐이다 (연동 설계 3-3).
+func (s *Server) validateForSave(sch *schema.File, tables map[string]*table.Table) ([]*validate.Problem, []*validate.Problem) {
+	assets, warnings, err := s.assetsFor(sch)
+	if err != nil {
+		warnings = append(warnings, &validate.Problem{File: filepath.ToSlash(s.indexPath),
+			Rule: validate.RuleAssetIndex, Message: "색인을 못 읽어 asset 검사를 건너뜀 — " + err.Error()})
+	}
+	problems, rowWarnings := validate.RunWith(sch, tables, validate.Options{Assets: assets, AssetsAsWarnings: true})
+	return problems, append(warnings, rowWarnings...)
+}
+
+// assetsFor 는 asset 열이 있을 때만 색인을 연다. 깨진 색인은 오류로 돌려준다.
+func (s *Server) assetsFor(sch *schema.File) (*assetindex.Index, []*validate.Problem, error) {
+	if !sch.UsesAsset() {
+		return nil, []*validate.Problem{}, nil
+	}
+	ix, status, err := s.openIndex()
+	if err != nil {
+		return nil, []*validate.Problem{}, err
+	}
+	return ix, validate.IndexWarnings(status), nil
 }
 
 // handleValidate 는 CLI 의 validate 와 같은 일을 한다. 한 글자도 안 쓴다.
@@ -171,7 +198,14 @@ func (s *Server) handleValidate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	problems := validate.Run(sch, tables)
+	// CLI validate 와 같게 V10 오류는 오류다. 깨진 색인은 CLI 의 종료 4 처럼 400 이다.
+	assets, warnings, err := s.assetsFor(sch)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	problems, rowWarnings := validate.RunWithIndex(sch, tables, assets)
+	warnings = append(warnings, rowWarnings...)
 	rows := 0
 	for _, t := range tables {
 		rows += len(t.Rows)
@@ -179,6 +213,7 @@ func (s *Server) handleValidate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":       len(problems) == 0,
 		"problems": problems,
+		"warnings": warnings,
 		"counts": map[string]any{
 			"tables": len(tables), "rows": rows, "errors": len(problems),
 		},

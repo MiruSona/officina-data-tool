@@ -206,6 +206,7 @@ func header(hash string) string {
 //
 // enum 은 구운 파일에 이름 문자열로 들어가므로 여기서도 string 이다.
 // 리플렉션을 쓰는 enum 포매터를 피하려는 것 — IL2CPP 에서 그게 제일 잘 터진다.
+// asset 도 address 문자열이다. 로드는 게임 코드가 한다.
 func csType(c *schema.Column) (string, error) {
 	var base string
 	switch c.Base {
@@ -215,7 +216,7 @@ func csType(c *schema.Column) (string, error) {
 		base = "float"
 	case schema.TypeBool:
 		base = "bool"
-	case schema.TypeString, schema.TypeRef, schema.TypeEnum:
+	case schema.TypeString, schema.TypeRef, schema.TypeEnum, schema.TypeAsset:
 		base = "string"
 	default:
 		return "", fmt.Errorf("모르는 타입 %q", c.Type)

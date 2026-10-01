@@ -21,10 +21,10 @@ var reEnumValue = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
 var reNamespace = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$`)
 
-// 열 칸은 설계 4-3 의 아홉이 전부다. 더 늘리지 않는다.
-var columnKeys = []string{"name", "type", "default", "min", "max", "enum", "ref", "loc", "desc"}
+// 열 칸은 설계 4-3 의 열이 전부다. 더 늘리지 않는다.
+var columnKeys = []string{"name", "type", "default", "min", "max", "enum", "ref", "loc", "desc", "kind"}
 
-var baseTypes = []string{TypeInt, TypeFloat, TypeBool, TypeString, TypeEnum, TypeRef}
+var baseTypes = []string{TypeInt, TypeFloat, TypeBool, TypeString, TypeEnum, TypeRef, TypeAsset}
 
 // Load 는 스키마 파일을 읽어 검사까지 마친 File 을 준다.
 //
@@ -208,6 +208,7 @@ func checkFirstColumn(c *collector, where string, first *Column) {
 		{"loc", first.Loc},
 		{"enum", first.Enum != ""},
 		{"ref", first.Ref != ""},
+		{"kind", first.Kind != ""},
 	}
 	for _, b := range banned {
 		if b.has {
@@ -308,6 +309,7 @@ func parseColumnOptions(c *collector, where string, fields map[string]json.RawMe
 	parseStringOption(c, where+".enum", fields, "enum", &col.Enum)
 	parseStringOption(c, where+".ref", fields, "ref", &col.Ref)
 	parseStringOption(c, where+".desc", fields, "desc", &col.Desc)
+	parseStringOption(c, where+".kind", fields, "kind", &col.Kind)
 	if raw, ok := fields["loc"]; ok {
 		if err := json.Unmarshal(raw, &col.Loc); err != nil {
 			c.add(where+".loc", "참거짓이 와야 한다")

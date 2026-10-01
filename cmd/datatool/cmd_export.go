@@ -10,6 +10,7 @@ import (
 	"github.com/mirusona/officina-data-tool/internal/bake"
 	"github.com/mirusona/officina-data-tool/internal/schema"
 	"github.com/mirusona/officina-data-tool/internal/table"
+	"github.com/mirusona/officina-data-tool/internal/validate"
 )
 
 // defaultExportPath 는 데이터 폴더 기준 굽는 자리다 (.datatool.json 의 "export" 기본값과 같다).
@@ -20,6 +21,7 @@ const defaultExportPath = "../Assets/StreamingAssets/gamedata.bytes"
 //
 // --force 같은 우회 옵션을 두지 않는다 — 굽기를 억지로 통과시키는 문을 열면 그 문이 기본값이 된다.
 func cmdExport(opts options, rest []string) int {
+	rest, requireIndex := takeFlag(rest, requireIndexFlag)
 	out, err := parseOutArg("export", rest)
 	if err != nil {
 		return fail(opts, exitUsage, err.Error())
@@ -32,9 +34,9 @@ func cmdExport(opts options, rest []string) int {
 
 	// 먼저 validate 다 (설계 5장). 검증에서 걸리면 한 바이트도 안 굽는다 —
 	// 반쯤 맞는 gamedata.bytes 가 게임에 들어가는 것이 제일 나쁘다.
-	sch, tables, code, err := loadAndValidate(opts, root.dir)
+	sch, tables, warnings, code, err := loadAndValidate(opts, root, requireIndex)
 	if code != exitOK {
-		return reportProblems(opts, tables, code, err)
+		return reportProblems(opts, tables, warnings, code, err)
 	}
 
 	data, err := bake.Bake(sch, tables, time.Now())
@@ -49,7 +51,7 @@ func cmdExport(opts options, rest []string) int {
 	if err := table.WriteFile(out, data); err != nil {
 		return fail(opts, exitWriteFail, fmt.Sprintf("%s 를 못 썼다 : %v", filepath.ToSlash(out), err))
 	}
-	return reportExport(opts, out, data, sch, tables)
+	return reportExport(opts, out, data, sch, tables, warnings)
 }
 
 // parseOutArg 는 --out(-o) 하나만 걷어낸다. 안 주면 빈 문자열이고 부르는 쪽이 기본값을 정한다.
@@ -67,7 +69,7 @@ func parseOutArg(command string, rest []string) (string, error) {
 		case strings.HasPrefix(arg, "--out="):
 			out = strings.TrimPrefix(arg, "--out=")
 		default:
-			return "", fmt.Errorf("%s 가 모르는 인자다: %q (쓸 수 있는 것: --out)", command, arg)
+			return "", fmt.Errorf("%s 가 모르는 인자다: %q (쓸 수 있는 것: --out, %s)", command, arg, requireIndexFlag)
 		}
 	}
 	return out, nil
@@ -82,7 +84,7 @@ func failBake(opts options, err error) int {
 	return fail(opts, exitData, err.Error())
 }
 
-func reportExport(opts options, out string, data []byte, sch *schema.File, tables map[string]*table.Table) int {
+func reportExport(opts options, out string, data []byte, sch *schema.File, tables map[string]*table.Table, warnings []*validate.Problem) int {
 	rows := 0
 	for _, t := range tables {
 		rows += len(t.Rows)
@@ -98,6 +100,7 @@ func reportExport(opts options, out string, data []byte, sch *schema.File, table
 			"tables":     len(sch.Tables),
 			"rows":       rows,
 			"schemaHash": sch.Hash(),
+			"warnings":   warnings,
 		})
 		return exitOK
 	}

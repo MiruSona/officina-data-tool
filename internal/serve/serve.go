@@ -35,10 +35,13 @@ type Server struct {
 	token string
 	// 쓰기는 한 번에 하나만. 두 탭이 같이 저장하면 나중 것이 앞 것을 조용히 덮는다.
 	mu sync.Mutex
+	// AssetTool 색인 자리(절대경로). 비면 색인이 없는 것으로 본다.
+	indexPath string
 }
 
 // New 는 데이터 폴더를 잡고 서버를 만든다. 폴더가 없으면 여기서 실패한다.
-func New(dir string) (*Server, error) {
+// indexPath 는 AssetTool 색인 자리다. 파일은 부를 때마다 다시 읽는다.
+func New(dir, indexPath string) (*Server, error) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return nil, err
@@ -59,7 +62,12 @@ func New(dir string) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Server{root: root, token: token}, nil
+	if indexPath != "" {
+		if indexPath, err = filepath.Abs(indexPath); err != nil {
+			return nil, err
+		}
+	}
+	return &Server{root: root, token: token, indexPath: indexPath}, nil
 }
 
 // Root 는 서버가 보는 데이터 폴더다.
@@ -87,6 +95,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/tables", s.handleTables)
 	mux.HandleFunc("/api/table/", s.handleTable)
 	mux.HandleFunc("/api/validate", s.handleValidate)
+	mux.HandleFunc("/api/assetindex", s.handleAssetIndex)
+	mux.HandleFunc("/api/asset", s.handleAsset)
 	mux.Handle("/", http.FileServer(http.FS(ui.FS)))
 	return s.guard(mux)
 }

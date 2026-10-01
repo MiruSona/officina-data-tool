@@ -17,6 +17,8 @@ const state = {
   dirty: false,
   active: null,       // 마지막으로 누른 행 (행 지우기가 쓴다)
   ids: new Map(),     // ref 용 : 표 이름 → id 목록
+  assets: null,       // /api/assetindex 결과. asset 열이 없으면 null
+  assetMap: new Map(), // address → 항목 목록
 };
 
 const $ = (id) => document.getElementById(id);
@@ -73,28 +75,31 @@ function drawTableList(tables) {
   });
 }
 
-function drawProblems(problems) {
+function drawProblems(problems, warnings = []) {
   const list = $("problemList");
-  $("problemCount").textContent = problems.length;
+  $("problemCount").textContent = problems.length + warnings.length;
   list.textContent = "";
-  if (problems.length === 0) {
+  if (problems.length === 0 && warnings.length === 0) {
     const li = document.createElement("li");
     li.className = "empty";
     li.textContent = "문제가 없다.";
     list.append(li);
     return;
   }
-  problems.forEach((p) => {
+  const all = problems.map((p) => [p, false]).concat(warnings.map((p) => [p, true]));
+  all.forEach(([p, isWarning]) => {
     const li = document.createElement("li");
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "row";
+    button.className = isWarning ? "row warn" : "row";
     const where = document.createElement("span");
     where.className = "where";
-    where.textContent = `${fileName(p.file)}:${p.line} — ${p.table}.${p.column || "행"}`;
+    where.textContent = p.line
+      ? `${fileName(p.file)}:${p.line} — ${p.table}.${p.column || "행"}`
+      : fileName(p.file);
     const what = document.createElement("span");
     what.className = "what";
-    what.textContent = p.message;
+    what.textContent = isWarning ? `경고 · ${p.message}` : p.message;
     button.append(where, what);
     button.addEventListener("click", () => jumpTo(p));
     li.append(button);
@@ -166,6 +171,8 @@ function columnDefs(columns) {
           editor: "list",
           editorParams: { values: state.ids.get(col.ref) || [], autocomplete: true, freetext: true },
         });
+      case "asset":
+        return assetColumn(def, col);
       default:
         return def;
     }
@@ -195,6 +202,202 @@ function listColumn(def, col) {
     editor: "input",
     headerTooltip: `${col.type} — 쉼표로 나눠 적는다`,
   });
+}
+
+/* asset 칸 (연동 설계 3-4 의 UI 칸) ---------------------------------- */
+
+// asset 칸 : 보기는 그림·▶·글자, 편집은 열 kind 로 거른 주소 드롭다운. freetext 라 색인이 낡아도 적힌다.
+function assetColumn(def, col) {
+  return Object.assign(def, {
+    formatter: (cell) => assetCell(cell.getValue()),
+    editor: "list",
+    editorParams: {
+      values: assetChoices(col.kind), autocomplete: true, freetext: true,
+      allowEmpty: true, listOnEmpty: true,
+    },
+    headerTooltip: col.desc || `${col.type}${col.kind ? " · " + col.kind : ""} — Addressables 주소 (하위는 주소[이름])`,
+  });
+}
+
+// assetChoices 는 드롭다운 값이다. 하위 이름이 있으면 주소[이름] 도 넣는다.
+function assetChoices(kind) {
+  if (!state.assets || !state.assets.ok) return [];
+  const values = new Set();
+  state.assets.entries.forEach((e) => {
+    if (kind && e.kind !== kind) return;
+    values.add(e.address);
+    e.sub.forEach((name) => values.add(`${e.address}[${name}]`));
+  });
+  return [...values];
+}
+
+// splitSub 는 서버 SplitSub 와 같다 : 마지막 `[` 에서 가르고 `]` 로 끝나야 한다.
+function splitSub(value) {
+  const open = value.lastIndexOf("[");
+  if (!value.endsWith("]") || open <= 0 || open === value.length - 2) return null;
+  return [value.slice(0, open), value.slice(open + 1, -1)];
+}
+
+// findAsset 은 칸 값으로 항목과 하위 rect 를 찾는다. 서버의 Find·pickEntry 와 같은 차례다 —
+// 같은 주소 여럿이면 미리보기가 되고 (하위면) 그 이름을 가진 항목을 먼저 고른다.
+function findAsset(value) {
+  const exact = state.assetMap.get(value);
+  if (exact) return { entry: exact.find((e) => e.preview !== "none") || exact[0], rect: null };
+  const parts = splitSub(value);
+  if (!parts) return null;
+  const list = state.assetMap.get(parts[0]);
+  if (!list) return null;
+  for (const e of list) {
+    const sub = (e.rects || []).find((r) => r.name === parts[1]);
+    if (sub && e.preview !== "none") return { entry: e, rect: sub.rect };
+  }
+  return { entry: list.find((e) => e.preview !== "none") || list[0], rect: null };
+}
+
+function assetCell(value) {
+  const box = document.createElement("span");
+  box.className = "asset";
+  if (value === undefined || value === null || value === "") return box;
+  const label = document.createElement("span");
+  label.className = "asset-name";
+  label.textContent = value;
+  const found = state.assets && state.assets.ok ? findAsset(String(value)) : null;
+  if (!found) {
+    if (state.assets && state.assets.ok && !state.assets.missing) box.classList.add("asset-missing");
+    box.append(label);
+    return box;
+  }
+  if (found.entry.preview === "image") {
+    box.append(assetThumb(value, found.rect));
+  } else if (found.entry.preview === "audio") {
+    box.append(assetPlay(value));
+  }
+  const tag = document.createElement("span");
+  tag.className = "kindtag";
+  tag.textContent = found.entry.kind;
+  box.append(label, tag);
+  return box;
+}
+
+// 파일은 토큰 머리를 실어 받아 blob 주소로 둔다. 주소창·DOM 에 토큰을 안 남긴다.
+const assetBlobs = new Map();
+
+// 못 받은 것(null)은 캐시하지 않는다 — 색인을 고친 뒤 다시 받을 수 있게.
+function assetBlob(address) {
+  if (!assetBlobs.has(address)) {
+    const pending = fetch(`/api/asset?address=${encodeURIComponent(address)}`, {
+      headers: { "X-Datatool-Token": TOKEN },
+    }).then((res) => {
+      const type = res.headers.get("Content-Type") || "";
+      if (!res.ok || type.startsWith("application/json")) return null;
+      return res.blob().then((b) => URL.createObjectURL(b));
+    }).catch(() => null).then((url) => {
+      if (!url && assetBlobs.get(address) === pending) assetBlobs.delete(address);
+      return url;
+    });
+    assetBlobs.set(address, pending);
+  }
+  return assetBlobs.get(address);
+}
+
+// clearAssetBlobs 는 색인을 다시 읽을 때 받아 둔 파일을 버린다.
+function clearAssetBlobs() {
+  assetBlobs.forEach((pending) => pending.then((url) => { if (url) URL.revokeObjectURL(url); }));
+  assetBlobs.clear();
+}
+
+// assetThumb 는 32px 그림이다. 하위 에셋이면 rect 칸만 보인다 — rect 의 y 는 아래에서 재므로 뒤집는다.
+function assetThumb(value, rect) {
+  const SIZE = 32;
+  const thumb = document.createElement("span");
+  thumb.className = "asset-thumb";
+  assetBlob(String(value)).then((url) => {
+    if (!url) return;
+    const img = new Image();
+    img.onload = () => {
+      const r = rect || { x: 0, y: 0, w: img.naturalWidth, h: img.naturalHeight };
+      const scale = SIZE / Math.max(r.w, r.h, 1);
+      const top = img.naturalHeight - (r.y + r.h);
+      thumb.style.backgroundImage = `url("${url}")`;
+      thumb.style.backgroundSize = `${img.naturalWidth * scale}px ${img.naturalHeight * scale}px`;
+      thumb.style.backgroundPosition = `${-r.x * scale}px ${-top * scale}px`;
+      thumb.style.width = `${r.w * scale}px`;
+      thumb.style.height = `${r.h * scale}px`;
+    };
+    img.src = url;
+  });
+  return thumb;
+}
+
+// 소리는 <audio> 하나로 튼다. 다른 칸을 누르면 앞 소리는 멈춘다.
+const player = { audio: new Audio(), button: null };
+
+function assetPlay(value) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "asset-play";
+  button.textContent = "▶";
+  button.title = "들어 보기";
+  button.addEventListener("click", (e) => {
+    e.stopPropagation();
+    playAsset(String(value), button);
+  });
+  return button;
+}
+
+async function playAsset(address, button) {
+  const same = player.button === button && !player.audio.paused;
+  player.audio.pause();
+  if (player.button) player.button.textContent = "▶";
+  player.button = null;
+  if (same) return;
+  const url = await assetBlob(address);
+  if (!url) {
+    toast(`${address} 를 못 받았다`, true);
+    return;
+  }
+  player.audio.src = url;
+  player.button = button;
+  button.textContent = "■";
+  player.audio.onended = () => { button.textContent = "▶"; };
+  player.audio.play().catch((err) => toast(`재생 못 함: ${err.message}`, true));
+}
+
+// loadAssets 는 asset 열이 있을 때만 색인 요약을 받는다. 부를 때마다 서버가 파일을 다시 읽는다.
+async function loadAssets(columns) {
+  if (!columns.some((c) => c.base === "asset")) {
+    drawAssetBar(null);
+    return;
+  }
+  const res = await api("/api/assetindex");
+  clearAssetBlobs();
+  state.assets = res.body;
+  state.assetMap = new Map();
+  (res.body.entries || []).forEach((e) => {
+    if (!state.assetMap.has(e.address)) state.assetMap.set(e.address, []);
+    state.assetMap.get(e.address).push(e);
+  });
+  drawAssetBar(res.body);
+}
+
+// drawAssetBar 는 색인이 없거나 낡았거나 깨졌을 때 표 위에 한 줄 띠를 그린다.
+function drawAssetBar(info) {
+  let bar = $("assetBar");
+  if (!bar) {
+    bar = document.createElement("p");
+    bar.id = "assetBar";
+    bar.className = "assetbar";
+    bar.setAttribute("role", "status");
+    document.querySelector(".layout").before(bar);
+  }
+  const lines = [];
+  if (info && !info.ok) lines.push(`AssetTool 색인을 못 읽었다 — ${info.error}`);
+  if (info && info.ok && info.missing) lines.push("AssetTool 색인이 없다 — asset 칸을 검사·미리보기 못 한다. assettool index 를 돌린다");
+  if (info && info.ok && info.stale) lines.push("AssetTool 색인이 낡았다 — Addressables 설정이 더 새롭다. assettool index 를 다시 돌린다");
+  if (info && info.ok) (info.notes || []).forEach((n) => lines.push(n));
+  bar.textContent = lines.join(" · ");
+  bar.hidden = lines.length === 0;
+  bar.classList.toggle("bad", !!info && !info.ok);
 }
 
 const escapeHTML = (s) => String(s).replace(/[&<>"]/g, (c) => (
@@ -300,6 +503,7 @@ async function openTable(name) {
   }
   state.name = name;
   await loadRefIDs(res.body.columns);
+  await loadAssets(res.body.columns);
 
   if (state.grid) state.grid.destroy();
   state.grid = new Tabulator("#table", {
@@ -353,17 +557,22 @@ async function save() {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(rows),
   });
+  const warnings = res.body.warnings || [];
   if (res.body.ok) {
     setDirty(false);
-    drawProblems([]);
-    markBad([]);
+    drawProblems([], warnings);
+    markBad(warnings);
     state.ids.delete(state.name); // id 가 바뀌었을 수 있다
-    toast(`${state.name}.json 을 저장했다 (${res.body.rows}행)`);
+    const v10 = warnings.some((w) => w.rule === "asset" || w.rule === "asset_kind");
+    let message = `${state.name}.json 을 저장했다 (${res.body.rows}행)`;
+    if (warnings.length) message += ` — 경고 ${warnings.length}건`;
+    if (v10) message += ", asset 주소 경고는 CLI validate 에서는 오류다";
+    toast(message, warnings.length > 0);
     await refreshList();
     return;
   }
   const problems = res.body.problems || [];
-  drawProblems(problems);
+  drawProblems(problems, warnings);
   markBad(problems);
   toast(problems.length
     ? `검증에 걸려 안 썼다 — 문제 ${problems.length}건`
@@ -376,7 +585,7 @@ async function validateAll() {
     toast(res.body.error || "검증하지 못했다", true);
     return;
   }
-  drawProblems(res.body.problems);
+  drawProblems(res.body.problems, res.body.warnings || []);
   markBad(res.body.problems);
   const { tables, rows, errors } = res.body.counts;
   toast(errors === 0

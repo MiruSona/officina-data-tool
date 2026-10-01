@@ -24,7 +24,7 @@ func cmdServe(opts options, rest []string) int {
 	if err != nil {
 		return fail(opts, code, err.Error())
 	}
-	server, err := serve.New(root.dir)
+	server, err := serve.New(root.dir, root.assetIndexPath())
 	if err != nil {
 		return failLoad(opts, err)
 	}

@@ -1,4 +1,4 @@
-// Package validate 는 데이터가 스키마와 맞는지 본다 (설계 6장 V1~V9).
+// Package validate 는 데이터가 스키마와 맞는지 본다 (설계 6장 V1~V9 · 연동 설계 3-3 V10).
 //
 // V1(JSON 이 깨졌나)과 V8(파일 이름 = 표 이름)은 여기 오기 전에 걸린다 —
 // 파일을 읽는 것은 table 묶음이고, 읽지도 못한 파일은 검사할 것이 없기 때문이다.
@@ -24,6 +24,17 @@ const (
 	RuleIDForm   = "id_form"  // V7 id 꼴이 아니다
 	RuleList     = "list"     // V9 list<T> 가 배열이 아니다
 	RuleTooMany  = "too_many" // 표 하나에서 잘라낸 나머지
+
+	RuleAsset     = "asset"      // V10 색인에 없는 주소 · 없는 하위 · list 안 빈 값
+	RuleAssetKind = "asset_kind" // V10 항목 kind 가 열 kind 와 다르다
+)
+
+// V10 경고 이름이다. 경고는 오류와 따로 모이고 종료 코드를 안 바꾼다.
+const (
+	RuleAssetIndex        = "asset_index"         // 색인이 없다 · 낡음을 못 본다
+	RuleAssetStale        = "asset_stale"         // 색인이 낡았다
+	RuleAssetSubUnchecked = "asset_sub_unchecked" // 하위 목록을 몰라 못 봤다
+	RuleAssetNotBuilt     = "asset_not_built"     // 빌드에 안 들어가는 항목
 )
 
 // Problem 은 데이터가 틀린 자리 하나다.

@@ -1,0 +1,7 @@
+{ "version": 1, "namespace": "MyGame.Data",
+  "tables": [
+    { "name": "card", "columns": [
+      { "name": "id",   "type": "string" },
+      { "name": "icon", "type": "asset", "kind": "image" },
+      { "name": "sfx",  "type": "list<asset>", "kind": "audio", "default": [] },
+      { "name": "any",  "type": "asset", "default": "" } ] } ] }

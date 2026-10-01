@@ -302,3 +302,23 @@ func TestFloatOutOfFloat32RangeIsAnError(t *testing.T) {
 		t.Fatalf("메시지가 「담을 수 없다」가 아니다: %v", err)
 	}
 }
+
+// A8. asset 은 address 문자열로, list<asset> 은 문자열 배열로 굽는다. 빠지면 기본값이다.
+func TestAssetIsString(t *testing.T) {
+	sch, data := bakeOK(t)
+	root := decodeBody(t, data)
+	monster := sch.Table("monster")
+
+	first := rowsOf(t, root, "monster")[0].([]any) // slime_green
+	if first[monster.ColumnIndex("icon")] != "icons[icon_sword]" {
+		t.Fatalf("asset 이 문자열이 아니다: %#v", first[monster.ColumnIndex("icon")])
+	}
+	sfx, ok := first[monster.ColumnIndex("sfx")].([]any)
+	if !ok || len(sfx) != 1 || sfx[0] != "Sfx/hit.wav" {
+		t.Fatalf("list<asset> 이 문자열 배열이 아니다: %#v", first[monster.ColumnIndex("sfx")])
+	}
+	blue := rowsOf(t, root, "monster")[1].([]any)
+	if blue[monster.ColumnIndex("icon")] != "" {
+		t.Fatalf("빠진 asset 이 기본값 빈 문자열이 아니다: %#v", blue[monster.ColumnIndex("icon")])
+	}
+}

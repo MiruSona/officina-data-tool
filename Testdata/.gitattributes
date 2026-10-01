@@ -1,3 +1,9 @@
 # 데이터 파일은 LF 로 통일한다. datatool fmt 가 CRLF 를 LF 로 바꾼다.
 *.json text eol=lf
 *.cs text eol=lf
+# 계약 예제는 바이트 대조용이라 줄끝 변환을 끈다 (위 줄보다 뒤에 둬야 이긴다).
+contract/*.json -text
+# 시험용 그림·소리는 바이트 그대로 둔다.
+*.png binary
+*.wav binary
+*.psd binary

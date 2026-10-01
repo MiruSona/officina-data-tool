@@ -6,7 +6,7 @@ package schema
 
 import "encoding/json"
 
-// 열 타입 일곱 중 여섯. 나머지 하나는 list<T> 다.
+// 열 타입 여덟 중 일곱. 나머지 하나는 list<T> 다.
 const (
 	TypeInt    = "int"
 	TypeFloat  = "float"
@@ -14,6 +14,8 @@ const (
 	TypeString = "string"
 	TypeEnum   = "enum"
 	TypeRef    = "ref"
+	// TypeAsset 은 Addressables address 문자열이다. 색인 검사(V10)는 validate 가 한다.
+	TypeAsset = "asset"
 )
 
 // File 은 schema.json 한 장이다.
@@ -33,7 +35,7 @@ type Table struct {
 	where string
 }
 
-// Column 은 열 하나의 정의다. 칸은 설계 4-3 의 아홉이 전부다.
+// Column 은 열 하나의 정의다. 칸은 설계 4-3 의 열이 전부다.
 type Column struct {
 	Name string
 	// 스키마에 적힌 그대로. list<string> 이면 "list<string>" 이다.
@@ -49,6 +51,8 @@ type Column struct {
 	Ref     string
 	Loc     bool
 	Desc    string
+	// asset 열이 받을 항목 종류. 비면 아무 종류나 받는다.
+	Kind string
 	// 오류에 찍을 자리("tables[1].columns[2]").
 	where string
 }
@@ -102,4 +106,16 @@ func (t *Table) ColumnIndex(name string) int {
 		}
 	}
 	return -1
+}
+
+// UsesAsset 은 asset 열이 하나라도 있는지 본다. 없으면 색인을 읽지도 않는다.
+func (f *File) UsesAsset() bool {
+	for _, t := range f.Tables {
+		for _, c := range t.Columns {
+			if c.Base == TypeAsset {
+				return true
+			}
+		}
+	}
+	return false
 }

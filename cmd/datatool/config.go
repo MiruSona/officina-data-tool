@@ -14,13 +14,31 @@ import (
 // init 이 만들고, 사람이 손으로 고친다.
 const configFileName = ".datatool.json"
 
-// config 는 .datatool.json 의 내용이다. 칸 둘뿐이고 둘 다 내보낼 자리다.
+// config 는 .datatool.json 의 내용이다. 칸 셋 — 내보낼 자리 둘과 읽을 색인 자리 하나.
 // 모르는 칸은 조용히 넘기지 않고 즉시 실패한다 — 오타가 기본값으로 둔갑하면 안 된다.
 type config struct {
 	// Gen 은 gen 이 C# 을 쓸 폴더다. 데이터 폴더 기준 상대경로로 적는다.
 	Gen string `json:"gen"`
 	// Export 는 export 가 gamedata.bytes 를 구울 자리다.
 	Export string `json:"export"`
+	// AssetIndex 는 AssetTool 색인 자리다 (연동 설계 3-2). 안 적으면 defaultAssetIndex.
+	AssetIndex string `json:"assetIndex"`
+}
+
+// defaultAssetIndex 는 데이터 폴더 기준 색인 자리다. 데이터 폴더가 Unity 뿌리 바로 아래라는 가정이다.
+const defaultAssetIndex = "../Library/AssetTool/address-index.json"
+
+// assetIndexPath 는 색인 자리를 정한다. 절대 경로면 무엇을 읽는지 stderr 에 한 줄 찍는다.
+func (r dataRoot) assetIndexPath() string {
+	p := r.cfg.AssetIndex
+	if p == "" {
+		return filepath.Join(r.dir, defaultAssetIndex)
+	}
+	if filepath.IsAbs(p) || filepath.VolumeName(p) != "" {
+		fmt.Fprintf(os.Stderr, "색인을 읽는다: %s\n", filepath.ToSlash(p))
+		return p
+	}
+	return filepath.Join(r.dir, p)
 }
 
 // dataRoot 는 명령 하나가 쓸 데이터 폴더와 거기서 읽은 설정이다.

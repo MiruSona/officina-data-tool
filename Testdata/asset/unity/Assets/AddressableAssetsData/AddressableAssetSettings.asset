@@ -1,0 +1,4 @@
+%YAML 1.1
+--- !u!114 &11400000
+MonoBehaviour:
+  m_Name: AddressableAssetSettings

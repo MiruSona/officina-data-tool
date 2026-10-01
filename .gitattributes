@@ -1,3 +1,5 @@
 # 시험 golden 과 go:embed 파일은 바이트로 견준다. Windows autocrlf 가 CRLF 로 바꾸면 시험이 깨진다.
 Testdata/** text eol=lf
 Unity/** text eol=lf
+# 계약 예제는 AssetTool 과 바이트로 대조한다. git 이 줄끝을 건드리지 않게 한다 (연동 설계 2-2).
+Testdata/contract/*.json -text

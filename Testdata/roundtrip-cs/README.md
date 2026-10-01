@@ -9,7 +9,7 @@ Unity 프로젝트 대신 net9.0 콘솔 한 판을 만들고, **`datatool gen` �
 | 파일 | 하는 일 |
 | --- | --- |
 | `Roundtrip.csproj` | `MessagePack` 패키지를 받고 `../gen/expected/*.cs` 를 링크해서 컴파일한다 |
-| `Program.cs` | 읽어서 값 52 가지를 기대값과 대조한다. 하나라도 어긋나면 종료 1 |
+| `Program.cs` | 읽어서 값 57 가지를 기대값과 대조한다. 하나라도 어긋나면 종료 1 |
 
 `gen` 이 행 클래스·enum·`GameDataTables` 뿐 아니라 **로더(`GameDataLoader`·`GameDataException`)까지
 네임스페이스를 맞춰 같이 내므로**, 여기서 파일을 베끼거나 네임스페이스를 손볼 일이 없다.
@@ -27,16 +27,17 @@ enum 이름 문자열 → enum 값 · `list<string>` · `list<int>` · **빠진 
 ```powershell
 cd DataTool\Testdata\roundtrip-cs
 ..\..\bin\datatool.exe export --data ..\table\ok --out $env:TEMP\gamedata.bytes
-dotnet run -- $env:TEMP\gamedata.bytes 81f25b44dda721be [해시가 다른 파일]
+dotnet run -- $env:TEMP\gamedata.bytes 1db5aa5f0ede6b0a [해시가 다른 파일]
 ```
 
 셋째 인자(해시를 일부러 망친 파일)는 없으면 그 항목만 건너뛴다. 만들 때는 구운 파일 안의
-`81f25b44dda721be` 열여섯 글자를 `0000000000000000` 으로 덮으면 된다 (길이가 같아 자리가 안 밀린다).
+`1db5aa5f0ede6b0a` 열여섯 글자를 `0000000000000000` 으로 덮으면 된다 (길이가 같아 자리가 안 밀린다).
 
 ## 마지막 결과 (2026-09-18)
 
 - .NET 9.0.10 (SDK 10.0.400) · MessagePack **3.1.9** · 빌드 **경고 0 · 오류 0**
 - `dotnet run` → **확인 52건 · 어긋남 0건 · 종료 0**. 한글·float32·enum·기본값·ref·예외 모두 맞았다.
+- 2026-10-01 asset 열(`monster.icon` · `monster.sfx`)을 더한 뒤 → **확인 57건 · 어긋남 0건**. asset 은 C# 에서 `string` · `string[]` 로 읽힌다.
 - MessagePack 3 의 소스 제너레이터(`MessagePackAnalyzer` 가 딸려 온다)가 골든 코드에서
   `ItemRowFormatter`·`MonsterRowFormatter`·`DropRowFormatter` 와 `GeneratedMessagePackResolver`
   를 **경고 없이** 만들어 냈다 — 리플렉션 없는 IL2CPP(U5) 쪽 신호가 좋다.

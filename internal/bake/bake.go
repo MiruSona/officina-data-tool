@@ -166,7 +166,7 @@ func convertScalar(col *schema.Column, raw json.RawMessage) (any, error) {
 		return toFloat32(raw)
 	case schema.TypeBool:
 		return toBool(raw)
-	case schema.TypeString, schema.TypeEnum, schema.TypeRef:
+	case schema.TypeString, schema.TypeEnum, schema.TypeRef, schema.TypeAsset:
 		return toString(col, raw)
 	}
 	return nil, fmt.Errorf("모르는 타입 %q 다", col.Type)

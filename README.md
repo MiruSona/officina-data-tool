@@ -56,7 +56,7 @@ datatool <명령> [--data DIR] [--json] [옵션…]
 | --- | --- | --- |
 | `init` | 데이터 폴더에 예제 `schema.json` · `.datatool.json` · 표 두 장을 만든다 | **쓴다** — 한 장이라도 이미 있으면 아무것도 안 쓰고 종료 1 |
 | `fmt` | 데이터 JSON 을 규칙대로 다시 쓴다 (열 차례 · 한 줄 한 행 · 기본값 빼기). **스키마에 없는 열이 있으면 한 글자도 안 쓰고 종료 2** — 다시 쓰면 그 값이 사라지기 때문이다. `--check` 는 한 글자도 안 쓰고 바뀔 파일만 알린다(있으면 종료 2) | **쓴다** — 데이터 JSON |
-| `validate` | 스키마와 데이터를 검사한다 (V1~V9). 첫 건에서 안 멈추고 다 모아서 낸다 | 안 쓴다 |
+| `validate` | 스키마와 데이터를 검사한다 (V1~V10). 첫 건에서 안 멈추고 다 모아서 낸다 | 안 쓴다 |
 | `export` | `gamedata.bytes` 를 굽는다. **먼저 validate** | **쓴다** — `--out` 자리 하나 |
 | `gen` | C# 을 만든다 (`<표>Row.cs` · `<enum>.cs` · `GameDataTables.cs`) **+ `Unity/` 의 로더 셋을 네임스페이스 치환해 같이 낸다**. **먼저 validate** | **쓴다** — 생성 폴더 안만 |
 | `serve` | 표 편집 UI 를 `127.0.0.1` 에만 띄운다. 저장은 행 배열을 엔진에 넘겨 검증 뒤 파일을 다시 쓴다 | **쓴다** — UI 가 저장할 때만 |
@@ -67,22 +67,28 @@ datatool <명령> [--data DIR] [--json] [옵션…]
 - `--data DIR` — 데이터 폴더(`GameData`).
 - `--json` — 결과를 JSON 한 덩어리로 낸다 (AI·스크립트가 부르기 좋게). 모든 명령이 받는다.
 
+`validate` · `export` · `gen` 은 `--require-asset-index` 도 받는다 — asset 열이 있는데 색인이 없으면 종료 4 (CI 용, 아래 「asset 열」).
+
 ### 데이터 폴더를 어떻게 찾나
 
 `--data` 를 안 주면 **지금 폴더에서 위로 올라가며 `.datatool.json` 을 찾는다.**
 한 칸마다 그 폴더 자신과 그 아래 `GameData/` 둘을 본다 — 설정은 `GameData/` 안에 살기 때문이다.
 못 찾으면 폴더를 지어내지 않고 **종료 1 과 안내**다.
 
-`.datatool.json` 은 칸이 둘뿐이고 둘 다 **데이터 폴더 기준 상대경로**다.
+`.datatool.json` 은 칸이 셋이고 셋 다 **데이터 폴더 기준 상대경로**다.
 
 ```json
 {
   "gen": "../Assets/_Project/Scripts/Data/Generated",
-  "export": "../Assets/StreamingAssets/gamedata.bytes"
+  "export": "../Assets/StreamingAssets/gamedata.bytes",
+  "assetIndex": "../Library/AssetTool/address-index.json"
 }
 ```
 
-- 이 값이 `export` · `gen` 의 기본 `--out` 이다. **명령에 `--out` 을 주면 그것이 이긴다.**
+- `gen` · `export` 값이 두 명령의 기본 `--out` 이다. **명령에 `--out` 을 주면 그것이 이긴다.**
+- `assetIndex` 는 AssetTool 이 만든 주소 색인 자리다. **안 적으면 위 값이 기본**이다 (데이터 폴더가 Unity 뿌리 바로 아래라는 가정).
+  절대 경로면 stderr 에 「색인을 읽는다: <경로>」 를 한 줄 찍는다.
+- **옛 exe 는 `assetIndex` 칸이 적힌 설정을 못 읽는다**(모르는 칸 → 종료 4). 칸을 적었으면 DataTool 을 새로 빌드한다.
 - 절대 경로·다른 드라이브·UNC 를 적어도 막지는 않지만 **무엇을 쓸지 stderr 에 한 줄 찍는다.**
 - 모르는 칸이 있으면 조용히 넘기지 않고 **종료 4** 다. 오타가 기본값으로 둔갑하지 않게.
 - BOM 이 붙어 있어도 읽는다 (Windows 편집기·PowerShell 이 붙여서 저장한다).
@@ -108,16 +114,26 @@ datatool serve --data GameData --port 0 --open
 | `GET /api/tables` | 표 이름과 행 수 |
 | `GET /api/table/{이름}` | 행 배열. 기본값이라 파일에서 빠진 열은 서버가 채워서 준다 |
 | `PUT /api/table/{이름}` | 행 배열 통째 → 검증 → 통과하면 tmp→이름바꾸기로 저장 (걸리면 400) |
-| `POST /api/validate` | `validate` 와 같은 일. 한 글자도 안 쓴다 |
+| `POST /api/validate` | `validate` 와 같은 일. 한 글자도 안 쓴다. V10 도 오류로 센다 · 응답에 `warnings` |
+| `GET /api/assetindex` | 색인 요약 (`ok` · `missing` · `stale` · `notes` · `entries`). **부를 때마다 파일을 다시 읽는다.** 색인이 깨졌으면 200 + `ok:false` |
+| `GET /api/asset?address=<주소>` | 원본 파일 바이트 (미리보기용). 막기와 형식 표는 아래 「asset 열」 |
+
+- **asset 칸은 저장 때 막지 않는다.** 없는 주소·틀린 종류(V10)는 `PUT` 응답의 `warnings` 로 오고 파일은 저장된다 —
+  색인이 낡았을 때 새 주소를 먼저 적을 수 있어야 해서다. **오류로 막는 것은 CLI `validate` 뿐이다.**
+- 화면 : image 칸은 32px 그림(하위 에셋은 그 칸만 잘라), audio 칸은 ▶ 버튼(한 번에 한 소리), 나머지는 글자 + 종류 표.
+  편집은 열 `kind` 로 거른 주소 드롭다운이고 직접 써도 된다. `list<asset>` 은 글자만 보인다(쉼표로 나눠 쓴다).
+  색인이 없거나 낡았거나 깨졌으면 표 위에 한 줄 띠가 뜬다.
 
 ## 종료 코드
 
 | 코드 | 뜻 |
 | --- | --- |
 | 0 / 1 | 성공 / 사용법 잘못 (모르는 인자 · 데이터 폴더를 못 찾음 · `init` 이 덮으려 함) |
-| **2** | **데이터 검증 실패** (타입 · 필수 · 참조 · 중복 · 범위 · `fmt --check` 가 바뀔 파일을 찾음) |
-| **3** | **스키마 자체가 틀림** (모르는 타입, 없는 enum, 첫 열이 `id` 가 아님) |
-| 4 / 5 | 읽기 실패 (없음 · JSON 깨짐 · 설정에 모르는 칸) / 쓰기 실패 |
+| **2** | **데이터 검증 실패** (타입 · 필수 · 참조 · 중복 · 범위 · asset 주소 · `fmt --check` 가 바뀔 파일을 찾음) |
+| **3** | **스키마 자체가 틀림** (모르는 타입, 없는 enum, 첫 열이 `id` 가 아님, asset 이 아닌 열에 `kind`) |
+| 4 / 5 | 읽기 실패 (없음 · JSON 깨짐 · 설정에 모르는 칸 · 주소 색인이 깨짐) / 쓰기 실패 |
+
+**경고는 종료 코드를 안 바꾼다.** 텍스트는 stderr 에 `경고: …` 줄, `--json` 은 `"warnings": [...]` (문제와 같은 꼴) 이다.
 
 2 와 3 을 가르는 이유는 **고칠 파일이 다르기** 때문이다. 3 이면 데이터를 아무리 봐도 소용없다.
 
@@ -139,7 +155,7 @@ datatool serve --data GameData --port 0 --open
 ## 스키마 타입
 
 `GameData/schema.json` 한 파일이 표 전부를 담는다. **첫 열은 반드시 `id`, 타입 `string`** 이다.
-열 칸은 `name` · `type` · `default` · `min` · `max` · `enum` · `ref` · `loc` · `desc` 아홉이 전부다.
+열 칸은 `name` · `type` · `default` · `min` · `max` · `enum` · `ref` · `loc` · `desc` · `kind` 열이 전부다.
 
 | 타입 | JSON | C# | 비고 |
 | --- | --- | --- | --- |
@@ -147,10 +163,58 @@ datatool serve --data GameData --port 0 --open
 | `string` | 문자열 | `string` | `"loc": true` 를 달 수 있다 (1차는 무시 — 2차 다국어 표시) |
 | `enum` | 목록 안의 문자열 | 생성된 `enum` | `enum` 칸 필수 |
 | `ref` | 다른 표의 `id` | `string` | 로더가 딕셔너리로 이어 준다 |
-| `list<T>` | 배열 | `T[]` | `T` 는 위 여섯 중 하나. **중첩 `list` 는 안 된다** |
+| `asset` | Addressables 주소 문자열 | `string` | `kind` 로 종류를 좁힐 수 있다. 하위 에셋은 `주소[이름]` (아래 「asset 열」) |
+| `list<T>` | 배열 | `T[]` | `T` 는 위 일곱 중 하나. **중첩 `list` 는 안 된다** |
 
 `default` 가 없고 값도 없으면 **필수 열**이다. `required` 칸을 따로 안 만든다.
 날짜·시간·벡터·중첩 문서·수식은 없다 — 필요하면 **표를 하나 더 만든다**로 푼다.
+
+## asset 열 (AssetTool 주소 색인)
+
+```json
+{ "name": "icon", "type": "asset", "kind": "image", "default": "" },
+{ "name": "sfx",  "type": "list<asset>", "kind": "audio" }
+```
+
+- 칸 값은 Addressables 주소다. 주소가 맞는지는 **AssetTool 이 만든 `address-index.json`** 으로 본다 (계약은 아래 「경계 계약」).
+- `kind` 는 `prefab` · `image` · `audio` · `scene` · `other` 중 하나다. asset 이 아닌 열에 달거나 모르는 값이면 종료 3.
+  없으면 아무 종류나 받는다. **`kind` 는 `schemaHash` 에 안 들어간다**(런타임 꼴이 안 바뀐다).
+- C# 은 `string`(`list<asset>` 은 `string[]`), 굽기도 문자열이다.
+- **스키마에 asset 열이 없으면 색인을 읽지도 않는다.**
+
+**검증 V10**
+
+| 경우 | CLI (`validate` · `export` · `gen`) | 규칙 이름 |
+| --- | --- | --- |
+| 색인 파일이 없다 | **경고** 한 줄, V10 건너뜀. `--require-asset-index` 면 **종료 4** | `asset_index` (경고) |
+| 색인이 깨졌다 · 모르는 `version` · 필수 칸 없음 · 모르는 `kind` · `settingsPath` 가 `Assets/`·`Packages/` 아래 `.asset` 이 아니다 | **종료 4** | — |
+| 색인이 낡았다 | 경고 한 줄, 검사는 그대로 | `asset_stale` (경고) |
+| 색인의 `unityRoot` 가 데이터 폴더의 부모가 아니다 | 경고 (낡음을 못 본다), 검사는 그대로 | `asset_index` (경고) |
+| 값이 `""` | 필수 열이면 `required` 오류, 선택 열이면 통과. `list<asset>` 안의 `""` 는 오류 | `required` · `asset` |
+| 주소가 색인에 없다 | 오류 + 편집 거리 2 안의 가까운 주소 | `asset` |
+| `주소[이름]` 인데 그 이름이 `sub` 에 없다 | 오류 | `asset` |
+| `주소[이름]` 인데 항목에 `sub` 가 없다 | 경고로 통과 (하위를 모른다) | `asset_sub_unchecked` (경고) |
+| 항목 `kind` ≠ 열 `kind` | 오류. 같은 주소의 항목 중 **`path` 가 있는 것만** 놓고 하나라도 맞으면 통과. `path` 있는 항목이 하나도 없으면 kind 검사를 건너뛴다 | `asset_kind` |
+| 가리킨 항목이 모두 `includeInBuild:false` | 경고 | `asset_not_built` (경고) |
+
+`""` 검사는 색인이 없어도 돈다 — 색인이 필요 없는 검사이기 때문이다.
+serve 저장 때는 V10 오류를 처음부터 경고로 모은다. 오류와 경고는 표당 100건을 **따로** 자르므로, 틀린 주소가 많아도 저장이 막히지 않는다.
+asset 열의 `default` 값은 V10 이 안 본다 (2차 후보, `Docs/Todo/할일.md`).
+
+**`/api/asset` 막기** — 차례대로 다 통과해야 연다. 하나라도 걸리면 파일을 한 바이트도 안 준다.
+
+1. 토큰 확인. 없으면 401.
+2. **주소만 받는다**(경로 인자 없음). 색인에 없는 주소 → 404. `path` 가 빈 항목 → `preview:false`.
+   같은 주소가 여럿이면 미리보기가 되고 경로가 바르고 (하위면) 그 이름을 가진 첫 항목을 연다.
+3. **감옥 뿌리는 DataTool 이 정한다.** 색인의 `unityRoot` 를 푼 폴더가 데이터 폴더의 부모와 같을 때만 연다. 다르면 403.
+4. `path` 는 정리된 `/` 상대경로이고 `Assets/` · `Packages/` 로 시작해야 한다. 아니면 403.
+5. `os.Root` 로 연다. `../` 와 뿌리 밖을 가리키는 링크·**Windows junction** 은 `os.Root` 가 막는다 (시험 `TestOSRootBlocksJunction` 으로 확인). 파일이 없으면 404.
+6. 파일이 아니거나 50MB 를 넘으면 `preview:false`.
+7. Content-Type 은 확장자 표로 박고 `X-Content-Type-Options: nosniff` 를 단다. 표에 없는 확장자는 **파일을 열기 전에** `preview:false` 다 (파일이 없어도 같다).
+
+| 브라우저가 여는 것 | 못 여는 것 → 200 + `{"preview":false,"path":…,"reason":…}` |
+| --- | --- |
+| png · jpg · jpeg · gif · bmp · wav · mp3 · ogg | psd · tga · tif · exr · aif · flac 등 그 밖 전부 |
 
 ## Unity 에 붙이기
 
@@ -166,10 +230,12 @@ MessagePack-CSharp 설치, 첫 호출, 확인 차례(U1~U5)는 **`Unity/README.m
 | `internal/schema/` | `schema.json` 읽기·검사·`schemaHash`. **타입 목록이 여기 하나뿐이다** |
 | `internal/table/` | 데이터 JSON 읽기·쓰기. **「한 줄 한 행」을 아는 유일한 곳** |
 | `internal/textfile/` | 읽기 입구 셋(표·스키마·설정)이 같이 쓰는 파일 읽기. **BOM 걷기가 여기 하나뿐이다** |
-| `internal/validate/` | 검증 규칙 V1~V9 와 오류 꼴 |
+| `internal/validate/` | 검증 규칙 V1~V10 과 오류·경고 꼴 |
+| `internal/assetindex/` | 주소 색인 읽기 · 주소/하위 찾기 · 낡음 판정 · 감옥 뿌리. **계약을 아는 유일한 곳** |
+| `internal/assettest/` | asset 시험이 같이 쓰는 판 깔기 (시험에서만 부른다) |
 | `internal/mpack/` · `internal/bake/` | 직접 쓴 MessagePack 인코더 / 16바이트 머리 + 본문 조립 |
 | `internal/gen/` | C# 생성과 네임스페이스 치환 |
-| `internal/serve/` | 로컬 서버와 API. 파일을 쓰는 곳은 `PUT` 하나뿐이다 |
+| `internal/serve/` | 로컬 서버와 API. 파일을 쓰는 곳은 `PUT` 하나뿐이다. 에셋 파일은 `asset.go` 가 `os.Root` 로만 연다 |
 | `ui/` | 표 편집 화면. `go:embed` 로 exe 안에 들어간다. 빌드 단계가 없다 (npm 없음) |
 | `Unity/` | 손으로 쓴 C#. 생성물은 아니지만 `go:embed` 로 exe 에 들어가 `gen` 이 같이 내 준다 |
 | `Testdata/` | 시험 자료. 무엇이 무엇인지는 `Testdata/README.md` |
@@ -194,14 +260,167 @@ MessagePack-CSharp 설치, 첫 호출, 확인 차례(U1~U5)는 **`Unity/README.m
 - 성능을 안 쟀다. 「수천 행」은 어림이다. 표 하나 = 파일 하나라 쪼개기는 열려 있다.
 - `gen` 은 **옛 생성 파일을 지우지 않는다.** 스키마에서 표를 없앴을 때 남는 `.cs` 는 목록으로 알리고 사람이 지운다.
 - 생성 폴더 **밖에는 한 글자도 안 쓴다.** 그래서 생성 파일만 모이는 폴더를 따로 가른다.
+- **CI · 새 PC 에는 `Library/` 가 없어 asset 검사(V10)가 경고 한 줄만 남기고 꺼진다.** 꼭 보려면 `--require-asset-index` 를 주고, 그 전에 `assettool index` 를 돌린다.
+- **낡음 판정이 못 잡는 것 둘** — Addressables 폴더 항목 안에 파일만 새로 넣은 경우, 스프라이트 시트를 다시 자른 경우(`.meta` 만 바뀐다).
+  둘 다 설정 `.asset` 파일이 안 바뀌어서다. 이상하면 `assettool index` 를 다시 돌린다.
+- **옛 exe 는 `.datatool.json` 의 `assetIndex` 칸을 못 읽는다**(종료 4). 칸을 적었으면 새로 빌드한다.
 
-## 알아 둘 것 (일부러 오류를 삼키는 자리 둘)
+## 알아 둘 것 (일부러 오류를 삼키는 자리 셋)
 
-오류를 안 보는 자리는 이 둘뿐이고, 둘 다 **알릴 곳이 없어서** 그렇게 둔 것이다.
+오류를 안 보는 자리는 이 셋뿐이고, 셋 다 **알릴 곳이 없어서** 그렇게 둔 것이다.
 
 | 자리 | 무엇을 삼키나 | 왜 |
 | --- | --- | --- |
 | `internal/gen/write.go` 의 `defer os.Remove(tmpPath)` | 임시 파일 지우기 실패 | 이름 바꾸기가 끝났으면 그 파일은 이미 없다. 없어서 나는 실패라 알릴 것이 아니다 |
 | `internal/serve/api.go` 의 `w.Write(out)` | 응답 본문 쓰기 실패 | 상태 코드를 이미 보낸 뒤다. 여기서 다른 상태 코드를 못 보낸다 |
+| `internal/serve/asset.go` 의 `io.Copy(w, file)` | 에셋 파일 보내기 실패 | 같은 까닭 — 200 을 보낸 뒤다 |
 
 남은 소단계와 차례는 `Docs/Todo/할일.md` 를 본다.
+
+아래 「2. 경계 계약」 절은 연동 설계(스튜디오 `Docs/Design/2026-09-23-AssetTool과DataTool연동설계.md`) 2절을 **글자 그대로** 옮긴 것이다.
+AssetTool README 에도 같은 글이 있다. 고칠 때는 두 곳을 같이 고친다.
+
+## 2. 경계 계약 (계약 버전 1, 두 README 에 같은 글)
+
+### 2-1. 색인 파일 `address-index.json`
+
+AssetTool `index` 가 **쓰고**, DataTool·AssetTool 웹이 **읽는다.** UTF-8, BOM 없음. 쓸 때는 tmp → 이름 바꾸기라 반쯤 쓴 파일을 읽는 일이 없다.
+
+**맨 위 칸**
+
+| 칸 | 타입 | 필수 | 뜻 |
+| --- | --- | --- | --- |
+| `version` | int | ✓ | 계약 버전. 지금 `1` |
+| `generator` | string | ✓ | 쓴 툴과 툴 버전 (`"assettool 0.1.0 (a1b2c3d)"`). 사람이 보는 값, 기계는 안 본다 |
+| `generatedAt` | string | ✓ | 만든 시각, UTC, Go `time.RFC3339Nano` 꼴 (`2026-09-23T05:12:00Z`) |
+| `unityRoot` | string | ✓ | 색인 파일이 있는 폴더 기준 Unity 뿌리 (`"../.."`). 다른 드라이브면 절대 경로 |
+| `settingsPath` | string | ✓ | 읽은 `AddressableAssetSettings.asset` 자리 (뿌리 기준) |
+| `sourceMtime` | string | ✓ | 읽은 설정 폴더(`settingsPath` 의 폴더) 안 `*.asset` 중 **가장 새 mtime**, UTC, `time.RFC3339Nano` |
+| `labels` | string[] | ✓ | 라벨 전체 목록 (`m_LabelTable.m_LabelNames`). 없으면 `[]` |
+| `entries` | object[] | ✓ | 항목. 차례는 아래 「쓰기 꼴」 |
+
+**`entries[]` 한 칸**
+
+| 칸 | 타입 | 필수 | 뜻 |
+| --- | --- | --- | --- |
+| `address` | string | ✓ | Addressables address 그대로 |
+| `guid` | string | ✓ | 에셋 guid (32자 16진) |
+| `path` | string | ✓ | 뿌리 기준 상대경로, `/` 구분, `Assets/` 또는 `Packages/` 로 시작. **빈 값 = 경로를 못 풀었다** |
+| `kind` | string | ✓ | `image` · `audio` · `prefab` · `scene` · `other` 다섯 중 하나 (아래 표). 경로를 못 풀었으면 `other` |
+| `group` | string | ✓ | 그룹 이름 (`m_GroupName`) |
+| `includeInBuild` | bool | ✓ | 빌드에 들어가나 (4-4 규칙) |
+| `labels` | string[] | ✓ | 이 항목의 라벨. 없으면 `[]` |
+| `fromFolder` | string | — | 폴더 항목을 펼친 것이면 그 폴더의 address |
+| `sub` | object[] | — | 하위 에셋. 지금은 **스프라이트 시트만** : `{"name": string, "rect": {"x","y","w","h": number}}`. `rect` 는 픽셀, **y 는 아래에서 잰다**(Unity 꼴 그대로). **`sub` 가 없으면 「하위를 모른다」** 이지 「하위가 없다」가 아니다 (FBX·spriteatlas 하위도 `address[이름]` 으로 부른다) |
+
+**`kind` 판정 (확장자, 소문자로 견준다)**
+
+| kind | 확장자 |
+| --- | --- |
+| `image` | png jpg jpeg gif bmp tga psd psb tif tiff exr hdr |
+| `audio` | wav mp3 ogg aif aiff flac xm mod it s3m |
+| `prefab` | prefab |
+| `scene` | unity |
+| `other` | 나머지 전부 (`.asset` · `.mat` · `.spriteatlas` · `.fbx` …) |
+
+**쓰기 꼴 (같은 입력이면 같은 바이트)**
+
+- 차례 : `entries` 는 **address 바이트 차례**(Go `sort.Strings` 와 같다 — 대문자가 소문자 앞), address 가 같으면 guid 차례.
+- 꼴 : Go `json.MarshalIndent(v, "", "  ")` 과 같은 들여쓰기(2칸) · HTML 이스케이프 안 함(`SetEscapeHTML(false)`) · 끝에 `\n` 하나 · 줄끝 LF. 칸 차례는 위 표 차례.
+- 시각 : `time.RFC3339Nano` (UTC, 뒤쪽 0 은 Go 가 떼는 대로).
+
+**그 밖의 규칙**
+
+- 같은 address 가 두 항목에 있을 수 있다 (Addressables 가 막지 않는다). 색인은 둘 다 넣고, `index` 는 알림 한 줄을 낸다.
+- **계약 버전 규칙 :** 같은 `version` 안에서는 **칸을 더하기만** 한다. 읽는 쪽은 모르는 칸을 무시한다. 칸을 빼거나 뜻을 바꾸면 `version` 을 올린다.
+- **모르는 `version`** 이면 읽는 쪽은 추측하지 않고 멈춘다 — 「색인 계약 버전 N 을 모른다. DataTool 을 새로 빌드하거나 AssetTool 버전을 맞춰라」.
+
+### 2-2. 예제 한 벌
+
+```json
+{
+  "version": 1,
+  "generator": "assettool 0.1.0 (a1b2c3d)",
+  "generatedAt": "2026-09-23T05:12:00Z",
+  "unityRoot": "../..",
+  "settingsPath": "Assets/AddressableAssetsData/AddressableAssetSettings.asset",
+  "sourceMtime": "2026-09-23T05:10:41.123456789Z",
+  "labels": [
+    "default",
+    "ui"
+  ],
+  "entries": [
+    {
+      "address": "Hero",
+      "guid": "0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+      "path": "Assets/Prefabs/Hero.prefab",
+      "kind": "prefab",
+      "group": "Default Local Group",
+      "includeInBuild": true,
+      "labels": [
+        "default"
+      ]
+    },
+    {
+      "address": "Sfx/hit.wav",
+      "guid": "1234567890abcdef1234567890abcdef",
+      "path": "Assets/Audio/Sfx/hit.wav",
+      "kind": "audio",
+      "group": "Audio",
+      "includeInBuild": true,
+      "labels": [],
+      "fromFolder": "Sfx"
+    },
+    {
+      "address": "icons",
+      "guid": "9a8b7c6d5e4f30211203f4e5d6c7b8a9",
+      "path": "Assets/Art/icons.png",
+      "kind": "image",
+      "group": "UI",
+      "includeInBuild": true,
+      "labels": [
+        "ui"
+      ],
+      "sub": [
+        {
+          "name": "icon_sword",
+          "rect": {
+            "x": 0,
+            "y": 64,
+            "w": 64,
+            "h": 64
+          }
+        },
+        {
+          "name": "icon_potion",
+          "rect": {
+            "x": 64,
+            "y": 64,
+            "w": 64,
+            "h": 64
+          }
+        }
+      ]
+    }
+  ]
+}
+```
+
+**이 파일은 `Testdata/contract/address-index.example.json` 으로 두 툴에 같은 바이트로 둔다.**
+두 저장소 `.gitattributes` 에 `Testdata/contract/*.json -text` 를 더한다 — git 이 줄끝을 CRLF 로 바꾸면 바이트 대조가 깨진다.
+DataTool 은 이것을 읽어 시험하고, AssetTool 은 시험 자료 프로젝트를 색인해 **이것과 바이트가 같은지** 본다(`generatedAt`·`generator`·`sourceMtime` 은 시험이 고정값으로 넣는다).
+계약을 고치면 두 파일을 같은 날 고치고, 양쪽 README 의 이 절도 같이 고친다.
+
+### 2-3. 썸네일 폴더 (2차부터 쓴다, 자리는 지금 정한다)
+
+| 규칙 | 값 |
+| --- | --- |
+| 자리 | `<Unity 뿌리>/Library/AssetTool/thumbs/<guid>.png` — **색인 자리와 상관없이 늘 여기** |
+| 파일 이름 | 에셋 guid 소문자 32자 + `.png`. address 가 아니라 guid 인 까닭 : address 는 바뀌어도 guid 는 안 바뀐다 |
+| 크기 · 꼴 | **128×128 정사각, RGBA PNG, 투명 배경.** 물체는 경계 상자를 가운데 맞춰 채운다 |
+| 누가 | AssetTool Unity 쪽이 쓴다 / DataTool·AssetTool 웹은 **있으면 보이고 없으면 「썸네일 없음」** |
+
+### 2-4. 칸 값 규칙
+
+`asset` 칸 값 = address 그대로. 하위 에셋은 `address[이름]` (Addressables 하위 객체 문법). **빈 문자열은 「없음」** 이다. 라벨은 안 받는다.
+
