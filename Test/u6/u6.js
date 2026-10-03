@@ -244,6 +244,21 @@ async function run() {
     return { note: `${text} · 빨간 칸 ${bad}`, ok: bad && text.includes("검증에 걸려") };
   });
 
+  // S10 — list 열 원소 문제(`counts[1]`)도 그 칸을 빨갛게 칠하고, 문제 줄을 누르면 그 칸으로 간다.
+  await scenario("S10", "list 원소 틀림 → 빨간 칸 · 문제 줄로 그 칸", "400 · 빨간 칸 · 그 칸으로 · 없음", none, async () => {
+    await editCell("drop_5", "counts", "1, x");
+    const text = await clickSave();
+    const cell = `state.grid.getRow("drop_5").getCell("counts").getElement()`;
+    const bad = await page.eval(`${cell}.classList.contains("bad")`);
+    await page.eval(`document.querySelector(".tabulator-tableholder").scrollTop = 1e9`);
+    await page.sleep(300);
+    await page.eval(`[...document.querySelectorAll("#problemList button.row")].find((b) => b.textContent.includes("counts[1]")).click()`);
+    await page.sleep(400);
+    const jumped = await page.eval(`${cell}.classList.contains("flash")`);
+    await page.shot(path.join(A.out, "S10-list-bad.png"));
+    return { note: `${text} · 빨간 칸 ${bad} · 그 칸으로 ${jumped}`, ok: bad && jumped && text.includes("검증에 걸려") };
+  }, "drop");
+
   await scenario("P1", "엑셀식 CRLF + 끝 줄바꿈 (2행)", "item.json 2 2", only("item.json", 2, 2), async () => {
     await clickCell("item_0100", "atk");
     await paste("11\t1.25\r\n22\t2.5\r\n");

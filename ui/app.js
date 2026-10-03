@@ -138,7 +138,7 @@ async function jumpTo(problem) {
     return;
   }
   row.scrollTo();
-  const cell = problem.column ? row.getCell(problem.column) : null;
+  const cell = problem.column ? row.getCell(columnField(problem.column)) : null;
   const el = cell ? cell.getElement() : row.getElement();
   el.classList.remove("flash");
   void el.offsetWidth; // 애니메이션을 다시 태우려고 한 번 재우친다
@@ -153,10 +153,13 @@ function markBad(problems) {
   problems.forEach((p) => {
     if (p.table !== state.name || !p.column || !p.line) return; // 줄 0(스키마 default)은 표에 칸이 없다
     const row = state.grid.getRow(p.row);
-    const cell = row && row.getCell(p.column);
+    const cell = row && row.getCell(columnField(p.column));
     if (cell) cell.getElement().classList.add("bad");
   });
 }
+
+// columnField 는 문제의 열 자리(`sfx[0]`)에서 원소 꼬리를 떼어 표의 칸 이름(`sfx`)으로 만든다.
+const columnField = (column) => String(column).replace(/\[\d+\]$/, "");
 
 /* 열 만들기 ----------------------------------------------------------- */
 
@@ -762,9 +765,12 @@ async function save() {
   drawProblems(problems, warnings);
   markBad(problems);
   toast(problems.length
-    ? `검증에 걸려 안 썼다 — 문제 ${problems.length}건`
+    ? `검증에 걸려 안 썼다 — ${countText(problems.length, warnings.length)}`
     : (res.body.error || "저장하지 못했다"), true);
 }
+
+// countText 는 알림의 건수 글이다. 문제 목록 머리(오류+경고)와 헷갈리지 않게 둘을 나눠 적고, 경고가 없으면 짧게.
+const countText = (errors, warns) => (warns ? `오류 ${errors} · 경고 ${warns}` : `오류 ${errors}건`);
 
 async function validateAll() {
   const res = await api("/api/validate", { method: "POST", headers: { "Content-Type": "application/json" } });
@@ -775,9 +781,10 @@ async function validateAll() {
   drawProblems(res.body.problems, res.body.warnings || []);
   markBad(res.body.problems);
   const { tables, rows, errors } = res.body.counts;
+  const warns = (res.body.warnings || []).length;
   toast(errors === 0
-    ? `문제 없다 — 표 ${tables}개 · ${rows}행`
-    : `문제 ${errors}건 — 아래 목록을 본다`, errors > 0);
+    ? (warns ? `오류 없다 · 경고 ${warns} — 표 ${tables}개 · ${rows}행` : `문제 없다 — 표 ${tables}개 · ${rows}행`)
+    : `${countText(errors, warns)} — 아래 목록을 본다`, errors > 0);
 }
 
 function addRow() {
