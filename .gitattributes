@@ -3,3 +3,5 @@ Testdata/** text eol=lf
 Unity/** text eol=lf
 # 계약 예제는 AssetTool 과 바이트로 대조한다. git 이 줄끝을 건드리지 않게 한다 (연동 설계 2-2).
 Testdata/contract/*.json -text
+# U6 웹 시험 스크립트(run.ps1·*.js)도 LF 로 고정한다 (설계 2026-10-03 D9).
+Test/** text eol=lf

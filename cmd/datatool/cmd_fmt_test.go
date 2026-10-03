@@ -137,3 +137,47 @@ func mustRead(t *testing.T, path string) string {
 	}
 	return string(data)
 }
+
+// 값은 같아도 숫자 철자가 규칙(JS String(Number) 꼴)과 다르면 --check 가 종료 2 로 잡는다.
+// 웹 UI 가 300.0 을 300 으로 보내 안 고친 줄이 diff 에 나오던 뿌리다 (설계 2026-10-03 5장 #4).
+func TestFmtCheckCatchesNumberSpelling(t *testing.T) {
+	dir := copyDir(t, okDataDir)
+	path := filepath.Join(dir, "item.json")
+	messy := strings.Replace(mustRead(t, path), `"price":300,`, `"price":300.0,`, 1)
+	if !strings.Contains(messy, `300.0`) {
+		t.Fatal("시험 자료에 price 300 이 없다")
+	}
+	if err := os.WriteFile(path, []byte(messy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := captureStdout(t, func() {
+		if code := run([]string{"fmt", "--check", "--data", dir}); code != exitData {
+			t.Fatalf("300.0 인데 --check 가 종료 %d 다", code)
+		}
+	})
+	if !strings.Contains(out, "item.json") {
+		t.Fatalf("고칠 파일 이름을 안 알렸다: %s", out)
+	}
+	if code := run([]string{"fmt", "--data", dir}); code != exitOK {
+		t.Fatalf("fmt 가 종료 %d 다", code)
+	}
+	if got := mustRead(t, path); got != mustRead(t, filepath.Join(okDataDir, "item.json")) {
+		t.Fatalf("fmt 뒤에도 ok 판과 다르다:\n%s", got)
+	}
+}
+
+// 1e999 처럼 float64 를 넘는 수는 fmt 가 파일:줄을 알리고 아무것도 안 쓴다.
+func TestFmtRejectsNumberOutOfRange(t *testing.T) {
+	dir := copyDir(t, okDataDir)
+	path := filepath.Join(dir, "item.json")
+	broken := strings.Replace(mustRead(t, path), `"price":300,`, `"price":1e999,`, 1)
+	if err := os.WriteFile(path, []byte(broken), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code := run([]string{"fmt", "--data", dir}); code == exitOK {
+		t.Fatal("1e999 인데 fmt 가 종료 0 이다")
+	}
+	if mustRead(t, path) != broken {
+		t.Fatal("실패했는데 파일을 썼다")
+	}
+}

@@ -222,3 +222,32 @@ func TestPutRejectsInvalidUTF8(t *testing.T) {
 		t.Fatal("400 인데 파일을 고쳤다")
 	}
 }
+
+// PUT 은 fmt 와 같은 숫자 철자로 쓴다 — 브라우저가 보낸 12.5 는 12.5 로, 1.25e1 도 12.5 로.
+// 파일에 300.0 으로 적혀 있던 값은 UI 가 300 으로 보내므로 300 이 된다 (설계 2026-10-03 8장).
+func TestPutWritesJSNumberSpelling(t *testing.T) {
+	ts, s, dir := newTestServer(t)
+	path := filepath.Join(dir, "item.json")
+	rows := `[{"id":"sword_iron","name":"철검","atk":12,"price":300.0,"tags":["weapon","melee"]},
+	{"id":"sword_steel","name":"강철검","atk":24,"price":12.5,"grade":"rare","tags":["weapon","melee"]},
+	{"id":"bow_short","name":"단궁","atk":9,"price":1.25e1,"tags":["weapon","ranged"]},
+	{"id":"potion_hp","name":"체력 물약","price":0.0,"usable":true,"tags":["consume"]},
+	{"id":"potion_mp","name":"마나 물약","price":60,"usable":true,"tags":["consume"]},
+	{"id":"gem_fire","name":"불의 보석","price":1200,"grade":"epic"}]`
+	code, body := call(t, ts, s, http.MethodPut, "/api/table/item", rows)
+	if code != http.StatusOK {
+		t.Fatalf("저장이 %d 다: %v", code, body)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"price":300,`, `"atk":24,"price":12.5,`, `"atk":9,"price":12.5,`, `{"id":"potion_hp","name":"체력 물약","usable":true`} {
+		if !strings.Contains(string(got), want) {
+			t.Fatalf("%s 가 없다:\n%s", want, got)
+		}
+	}
+	if strings.Contains(string(got), "300.0") || strings.Contains(string(got), "e1") {
+		t.Fatalf("숫자 철자가 안 바뀌었다:\n%s", got)
+	}
+}

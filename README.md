@@ -123,6 +123,10 @@ datatool serve --data GameData --port 0 --open
 - 화면 : image 칸은 32px 그림(하위 에셋은 그 칸만 잘라), audio 칸은 ▶ 버튼(한 번에 한 소리), 나머지는 글자 + 종류 표.
   편집은 열 `kind` 로 거른 주소 드롭다운이고 직접 써도 된다. `list<asset>` 은 글자만 보인다(쉼표로 나눠 쓴다).
   색인이 없거나 낡았거나 깨졌으면 표 위에 한 줄 띠가 뜬다.
+- 붙여넣기는 CRLF·CR 을 LF 로 고르고 끝 줄바꿈 하나만 뗀다(엑셀 복사 그대로 붙여도 된다). 표 끝을 넘친 행은 **안 늘리고 빨간 알림**만 띄운다 — 행 추가 뒤 다시 붙인다.
+- 편집 칸을 연 채 Ctrl+S 를 눌러도 입력을 확정한 뒤 저장한다. 서버가 꺼져 저장을 못 하면 빨간 알림이 뜨고 고친 것은 화면에 남는다.
+- 「행 지우기」는 범위로 고른 행을 전부 지운다. 열 전체를 골랐거나 20행을 넘으면 확인창이 먼저 뜬다. Ctrl+Z 한 번이면 묶음째 되살아난다 — 표 밖(단추를 누른 뒤)에서도 듣는다.
+- **U6(2,000행 편집 뒤 diff 가 고친 줄만인가)은 `Test/u6/run.ps1` 이 크롬 headless 로 판정한다** — 시나리오 23개 · Node 22 이상과 크롬(또는 Edge)만 있으면 된다 · 종료 0 통과 · 1 실패 · 2 환경 문제 · `-DataTool <exe>` 를 안 주면 소스로 임시 폴더에 새로 굽는다(`bin/` 은 안 건드린다).
 
 ## 종료 코드
 
@@ -151,6 +155,7 @@ datatool serve --data GameData --port 0 --open
 2. **열 차례는 스키마 차례를 따르고, 기본값과 같은 열은 뺀다** (위 `potion_hp` 의 `atk`).
 3. **`id` 는 문자열**이고 표 안에서 유일하다 (`^[a-z][a-z0-9_]*$`). 파일 이름 = 표 이름이다.
 4. **데이터 파일은 LF 로 통일한다.** `fmt` 는 CRLF 를 LF 로 바꾼다. BOM 이 붙어 있어도 읽는다.
+5. **숫자는 JS `String(Number(x))` 꼴로 적는다** — `300.0` → `300`, `1.25e1` → `12.5`, `1e21` → `1e+21`, `-0` → `0`. 열 타입은 안 본다(int 열 `1.0` 도 `1`). 웹 UI 가 보내는 꼴과 글자까지 같아서 UI 로 저장해도 안 고친 줄이 diff 에 안 나온다. float64 를 넘는 수(`1e999`)는 `fmt` 가 파일:줄을 알리고 멈춘다.
 
 ## 스키마 타입
 
@@ -221,6 +226,7 @@ asset 열의 `default` 값은 V10 이 안 본다 (2차 후보, `Docs/Todo/할일
 `Unity/` 의 손으로 쓴 `.cs` 둘과 `.asmdef` 는 **`gen` 이 exe 안에서 꺼내 네임스페이스를 갈아 끼워
 생성 폴더에 같이 써 낸다.** 사람이 복사하고 사람이 치환하면 「`Officina.` 잔여 0」을 아무도 안 세기 때문이다.
 MessagePack-CSharp 설치, 첫 호출, 확인 차례(U1~U5)는 **`Unity/README.md`** 를 본다.
+U1~U5 · U4b 는 **`Unity/Verify/verify.ps1 -Project <Unity 프로젝트>`** 가 배치모드로 판정한다 (종료 0 통과 · 1 실패 · 2 환경 문제).
 
 ## 폴더
 
@@ -238,7 +244,9 @@ MessagePack-CSharp 설치, 첫 호출, 확인 차례(U1~U5)는 **`Unity/README.m
 | `internal/serve/` | 로컬 서버와 API. 파일을 쓰는 곳은 `PUT` 하나뿐이다. 에셋 파일은 `asset.go` 가 `os.Root` 로만 연다 |
 | `ui/` | 표 편집 화면. `go:embed` 로 exe 안에 들어간다. 빌드 단계가 없다 (npm 없음) |
 | `Unity/` | 손으로 쓴 C#. 생성물은 아니지만 `go:embed` 로 exe 에 들어가 `gen` 이 같이 내 준다 |
+| `Unity/Verify/` | Unity 배치모드 검증 — `verify.ps1` · dll 목록(`Packages.psd1`) · 시험·빌드·탐침 C# · U4b 자료. `go:embed` 대상이 아니다 |
 | `Testdata/` | 시험 자료. 무엇이 무엇인지는 `Testdata/README.md` |
+| `Test/u6/` | 웹 UI 자동 판정 U6 — `run.ps1` · `gen.js`(2,000행 + 숫자 철자 행) · `cdp.js`(Node 내장 WebSocket CDP) · `u6.js`(시나리오). Go 시험이 아니다 — Node·크롬 없는 기계에서도 `go test` 가 안 깨진다 |
 | `Docs/` | `Research` · `Design` · `Todo`. 설계는 `Docs/Design/2026-09-18-DataTool설계.md` |
 
 ## 2차에 비워 둔 자리

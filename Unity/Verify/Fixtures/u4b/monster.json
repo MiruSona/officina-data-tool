@@ -1,0 +1,6 @@
+[
+{"id":"slime_green","name":"초록 슬라임","hp":30,"icon":"icons[icon_sword]","sfx":["Sfx/hit.wav"]},
+{"id":"slime_blue","name":"파랑 슬라임","hp":45,"element":"ice"},
+{"id":"wolf_gray","name":"잿빛 늑대","hp":120},
+{"id":"golem_fire","name":"불의 골렘","hp":900}
+]

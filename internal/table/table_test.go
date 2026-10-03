@@ -291,3 +291,82 @@ func TestLoadFileWithBOM(t *testing.T) {
 		t.Fatal("행을 하나도 못 읽었다")
 	}
 }
+
+// 숫자 철자는 JS String(Number(x)) 와 글자까지 같다 (설계 2026-10-03 5장 표 18건).
+// 기대값은 node 로 String(Number(x)) 를 돌려 맞춰 본 것이다.
+func TestCanonicalNumberSpelling(t *testing.T) {
+	cases := []struct {
+		no   int
+		in   string
+		want string
+	}{
+		{1, `0`, `0`},
+		{2, `-0`, `0`},
+		{2, `-0.0`, `0`},
+		{3, `1`, `1`},
+		{4, `300.0`, `300`},
+		{5, `1.25e1`, `12.5`},
+		{5, `1.25E1`, `12.5`},
+		{6, `0.05`, `0.05`},
+		{6, `0.050`, `0.05`},
+		{7, `1e21`, `1e+21`},
+		{8, `1e20`, `100000000000000000000`},
+		{9, `1e-7`, `1e-7`},
+		{10, `0.000001`, `0.000001`},
+		{11, `123456789012345680000`, `123456789012345680000`},
+		{12, `0.30000000000000004`, `0.30000000000000004`},
+		{13, `-1.5e-10`, `-1.5e-10`},
+		{16, `1.0`, `1`},
+		{17, `[1.0,2.50]`, `[1,2.5]`},
+		// 표 밖 경계 몇 개 — 모두 node 로 대조했다
+		{0, `1e-6`, `0.000001`},
+		{0, `5e-324`, `5e-324`},
+		{0, `1.7976931348623157e308`, `1.7976931348623157e+308`},
+		{0, `-12`, `-12`},
+		{0, `123.456`, `123.456`},
+		{0, `9007199254740993`, `9007199254740992`},
+		{0, `{"b":[0.50],"a":"x"}`, `{"a":"x","b":[0.5]}`},
+	}
+	for _, c := range cases {
+		got, err := canonical([]byte(c.in))
+		if err != nil {
+			t.Fatalf("#%d %s: 오류 %v", c.no, c.in, err)
+		}
+		if string(got) != c.want {
+			t.Fatalf("#%d %s: 바란 것 %s, 나온 것 %s", c.no, c.in, c.want, got)
+		}
+	}
+}
+
+// float64 를 넘는 수는 오류(#14), NaN·Infinity 는 JSON 이 아니라 읽기 오류(#15).
+func TestCanonicalNumberErrors(t *testing.T) {
+	for _, in := range []string{`1e999`, `-1e999`, `[1e400]`} {
+		_, err := canonical([]byte(in))
+		if err == nil || !strings.Contains(err.Error(), "float64 범위") {
+			t.Fatalf("%s: float64 범위 오류를 바랐는데 %v", in, err)
+		}
+	}
+	for _, in := range []string{`NaN`, `Infinity`} {
+		if _, err := canonical([]byte(in)); err == nil {
+			t.Fatalf("%s: 읽기 오류를 바랐는데 통과했다", in)
+		}
+	}
+}
+
+// 기본값 0 과 적힌 0.0 은 같은 canonical 이라 열을 뺀다 (#18).
+func TestIsDefaultUsesSameNumberSpelling(t *testing.T) {
+	col := &schema.Column{Name: "price", Default: []byte(`0`)}
+	for _, in := range []string{`0.0`, `-0`, `0e5`} {
+		v, err := canonical([]byte(in))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !isDefault(col, v) {
+			t.Fatalf("%s 가 기본값 0 과 다르다고 나왔다", in)
+		}
+	}
+	col300 := &schema.Column{Name: "price", Default: []byte(`300.0`)}
+	if !isDefault(col300, []byte(`300`)) {
+		t.Fatal("기본값 300.0 과 300 이 다르다고 나왔다")
+	}
+}

@@ -38,6 +38,7 @@ dotnet run -- $env:TEMP\gamedata.bytes 1db5aa5f0ede6b0a [해시가 다른 파일
 - .NET 9.0.10 (SDK 10.0.400) · MessagePack **3.1.9** · 빌드 **경고 0 · 오류 0**
 - `dotnet run` → **확인 52건 · 어긋남 0건 · 종료 0**. 한글·float32·enum·기본값·ref·예외 모두 맞았다.
 - 2026-10-01 asset 열(`monster.icon` · `monster.sfx`)을 더한 뒤 → **확인 57건 · 어긋남 0건**. asset 은 C# 에서 `string` · `string[]` 로 읽힌다.
+- 2026-10-03 해시 앞당김(D1)·숫자 철자(D2) 뒤 다시 돌림 → **확인 57건 · 어긋남 0건 · 빌드 경고 0 · 종료 0** (해시 어긋난 파일의 GameDataException 포함).
 - MessagePack 3 의 소스 제너레이터(`MessagePackAnalyzer` 가 딸려 온다)가 골든 코드에서
   `ItemRowFormatter`·`MonsterRowFormatter`·`DropRowFormatter` 와 `GeneratedMessagePackResolver`
   를 **경고 없이** 만들어 냈다 — 리플렉션 없는 IL2CPP(U5) 쪽 신호가 좋다.

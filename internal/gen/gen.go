@@ -383,10 +383,25 @@ func tablesDeserialize(b *strings.Builder, f *schema.File) {
 	b.WriteString("        public static GameDataTables Deserialize(ReadOnlyMemory<byte> body)\n        {\n")
 	b.WriteString("            return Deserialize(body, MessagePackSerializer.DefaultOptions);\n")
 	b.WriteString("        }\n\n")
+	b.WriteString("        // 몸통 전체(맵 머리 · 키 · _meta 포함)의 MessagePack 예외와 잘린 파일을 GameDataException 하나로 모은다.\n")
+	b.WriteString("        // 표 안에서 터진 것은 ReadTable 이 표 이름을 담아 이미 싸 두었으니 그대로 다시 던진다.\n")
 	b.WriteString("        public static GameDataTables Deserialize(ReadOnlyMemory<byte> body, MessagePackSerializerOptions options)\n        {\n")
+	b.WriteString("            try\n            {\n")
+	b.WriteString("                return ReadBody(body, options);\n")
+	b.WriteString("            }\n")
+	b.WriteString("            catch (GameDataException)\n            {\n                throw;\n            }\n")
+	b.WriteString("            catch (MessagePackSerializationException e)\n            {\n")
+	b.WriteString("                throw new GameDataException(\"구운 파일이 깨졌다 — MessagePack 으로 못 읽는다. datatool export 로 다시 구워라\", e);\n")
+	b.WriteString("            }\n")
+	b.WriteString("            catch (System.IO.EndOfStreamException e)\n            {\n")
+	b.WriteString("                throw new GameDataException(\"구운 파일이 깨졌다 — 중간에 끊겼다. datatool export 로 다시 구워라\", e);\n")
+	b.WriteString("            }\n")
+	b.WriteString("        }\n\n")
+	b.WriteString("        private static GameDataTables ReadBody(ReadOnlyMemory<byte> body, MessagePackSerializerOptions options)\n        {\n")
 	b.WriteString("            MessagePackReader reader = new MessagePackReader(body);\n")
 	b.WriteString("            string schemaHash = null;\n")
 	b.WriteString("            string builtAt = null;\n")
+	b.WriteString("            bool metaSeen = false;\n")
 	for _, t := range f.Tables {
 		fmt.Fprintf(b, "            %s[] %s = null;\n", className(t.Name), localName(t.Name))
 	}
@@ -395,11 +410,15 @@ func tablesDeserialize(b *strings.Builder, f *schema.File) {
 	b.WriteString("                string key = reader.ReadString();\n")
 	b.WriteString("                switch (key)\n                {\n")
 	b.WriteString("                    case \"_meta\":\n")
+	b.WriteString("                        // 해시는 표를 읽기 **전에** 본다. 열 꼴이 바뀐 옛 파일이 MessagePack 예외보다 먼저 우리 예외로 터지게.\n")
 	b.WriteString("                        ReadMeta(ref reader, out schemaHash, out builtAt);\n")
+	b.WriteString("                        CheckHash(schemaHash);\n")
+	b.WriteString("                        metaSeen = true;\n")
 	b.WriteString("                        break;\n")
 	for _, t := range f.Tables {
 		fmt.Fprintf(b, "                    case %s:\n", quote(t.Name))
-		fmt.Fprintf(b, "                        %s = MessagePackSerializer.Deserialize<%s[]>(ref reader, options);\n", localName(t.Name), className(t.Name))
+		fmt.Fprintf(b, "                        RequireMeta(metaSeen, %s);\n", quote(t.Name))
+		fmt.Fprintf(b, "                        %s = ReadTable<%s>(ref reader, options, %s);\n", localName(t.Name), className(t.Name), quote(t.Name))
 		b.WriteString("                        break;\n")
 	}
 	b.WriteString("                    default:\n")
@@ -407,11 +426,8 @@ func tablesDeserialize(b *strings.Builder, f *schema.File) {
 	b.WriteString("                        reader.Skip();\n")
 	b.WriteString("                        break;\n")
 	b.WriteString("                }\n            }\n\n")
-	b.WriteString("            if (schemaHash != SchemaHash)\n            {\n")
-	b.WriteString("                throw new GameDataException(\n")
-	b.WriteString("                    \"스키마가 달라졌는데 안 구웠다. 구운 파일 : \" + (schemaHash ?? \"없음\") +\n")
-	b.WriteString("                    \", 코드 : \" + SchemaHash + \" — datatool export 를 다시 돌려라\");\n")
-	b.WriteString("            }\n\n")
+	b.WriteString("            // 끝 검사 — _meta 가 아예 없던 파일은 여기서 \"없음\" 으로 던진다.\n")
+	b.WriteString("            CheckHash(schemaHash);\n\n")
 	b.WriteString("            GameDataTables tables = new GameDataTables();\n")
 	b.WriteString("            tables.BuiltAt = builtAt;\n")
 	for _, t := range f.Tables {
@@ -444,9 +460,42 @@ func tablesGet(b *strings.Builder, f *schema.File) {
 
 }
 
-// tablesHelpers 는 ReadMeta · Require · Index · IdOf 넷과 닫는 괄호다.
+// tablesHelpers 는 CheckHash · RequireMeta · ReadTable · ReadMeta · Require · Index · IdOf 와 닫는 괄호다.
 func tablesHelpers(b *strings.Builder, f *schema.File) {
 	b.WriteString(`
+        private static void CheckHash(string schemaHash)
+        {
+            if (schemaHash != SchemaHash)
+            {
+                throw new GameDataException(
+                    "스키마가 달라졌는데 안 구웠다. 구운 파일 : " + (schemaHash ?? "없음") +
+                    ", 코드 : " + SchemaHash + " — datatool export 를 다시 돌려라");
+            }
+        }
+
+        // datatool 이 구운 파일은 _meta 가 늘 첫 키다 (맵 키를 정렬해 쓰고 '_' 가 소문자보다 앞).
+        // 표가 먼저 오면 다른 길로 만든 파일이라 해시를 보기 전에 읽지 않는다.
+        private static void RequireMeta(bool metaSeen, string table)
+        {
+            if (metaSeen == false)
+            {
+                throw new GameDataException("_meta 가 표 " + table + " 보다 뒤에 있다 — datatool export 로 다시 구워라");
+            }
+        }
+
+        // 표 하나를 읽는다. MessagePack 예외는 GameDataException 으로 싸서 게임 코드가 예외 하나만 잡게 한다.
+        private static T[] ReadTable<T>(ref MessagePackReader reader, MessagePackSerializerOptions options, string table)
+        {
+            try
+            {
+                return MessagePackSerializer.Deserialize<T[]>(ref reader, options);
+            }
+            catch (MessagePackSerializationException e)
+            {
+                throw new GameDataException("표 " + table + " 을 못 읽었다 — 구운 파일과 코드의 열 꼴이 다르다. datatool gen · export 를 다시 돌려라", e);
+            }
+        }
+
         private static void ReadMeta(ref MessagePackReader reader, out string schemaHash, out string builtAt)
         {
             schemaHash = null;

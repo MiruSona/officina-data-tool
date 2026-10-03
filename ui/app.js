@@ -15,7 +15,10 @@ const state = {
   name: "",           // 지금 보고 있는 표
   grid: null,         // Tabulator 인스턴스
   dirty: false,
-  active: null,       // 마지막으로 누른 행 (행 지우기가 쓴다)
+  active: null,       // 마지막으로 누른 행 (범위가 비었을 때 행 지우기가 쓴다)
+  activeCell: null,   // 마지막으로 누른 칸 (정렬 뒤 범위를 다시 세울 때 쓴다)
+  undoing: false,     // 묶음 되돌리기 중 — historyUndo·historyRedo 재진입을 막는다
+  pasteNote: "",      // 붙여넣기 파서가 남긴 열 넘침 알림. pasteAction 이 행 넘침과 함께 띄운다
   ids: new Map(),     // ref 용 : 표 이름 → id 목록
   assets: null,       // /api/assetindex 결과. asset 열이 없으면 null
   assetMap: new Map(), // address → 항목 목록
@@ -25,9 +28,18 @@ const $ = (id) => document.getElementById(id);
 
 /* 서버와 말하기 ------------------------------------------------------- */
 
+// api 는 fetch 가 던져도(서버 꺼짐 등) 던지지 않고 실패 답을 돌려준다.
+// 부르는 쪽의 기존 실패 길(빨간 토스트 · dirty 그대로)이 그대로 쓰인다 (설계 2026-10-03 6장).
+const UNREACHABLE = "서버에 못 닿았다 — datatool serve 가 꺼졌는지 본다. 고친 것은 화면에 남아 있다";
+
 async function api(path, options = {}) {
   const headers = Object.assign({ "X-Datatool-Token": TOKEN }, options.headers || {});
-  const res = await fetch(path, Object.assign({}, options, { headers }));
+  let res;
+  try {
+    res = await fetch(path, Object.assign({}, options, { headers }));
+  } catch (err) {
+    return { status: 0, body: { ok: false, error: UNREACHABLE } };
+  }
   let body = {};
   try {
     body = await res.json();
@@ -491,6 +503,73 @@ function listValue(value, base) {
   return parts;
 }
 
+/* 붙여넣기 (설계 2026-10-03 6장 · D3) --------------------------------- */
+
+// cleanPaste 는 클립보드 글의 줄끝을 고른다.
+//   ① \r\n 과 홀로 선 \r 을 \n 으로 — 안 하면 마지막 칸에 \r 이 붙어 파일까지 간다
+//   ② 끝 줄바꿈은 **하나만** 뗀다 — 엑셀이 붙이는 것이 하나다. 둘 이상이면 나머지는 사용자가 고른 빈 행이다
+// 칸 안에 줄바꿈이 든 엑셀 따옴표 칸("a\nb")은 안 푼다 (게임 데이터 문자열엔 드물다).
+function cleanPaste(text) {
+  const lf = String(text).replace(/\r\n?/g, "\n");
+  return lf.endsWith("\n") ? lf.slice(0, -1) : lf;
+}
+
+// pasteParser 는 줄끝을 고른 뒤 Tabulator 기본 range 파서에 맡긴다.
+// 부르는 this 는 Tabulator clipboard 모듈이고, 기본 파서는 그 클래스의 pasteParsers.range 에 있다.
+function pasteParser(text) {
+  const base = this.constructor.pasteParsers && this.constructor.pasteParsers.range;
+  if (!base) {
+    toast("붙여넣기 파서를 못 찾았다 — Tabulator 판이 바뀌었는지 본다", true);
+    return false;
+  }
+  const clean = cleanPaste(text);
+  state.pasteNote = columnOverflow(this.table, clean);
+  return base.call(this, clean);
+}
+
+// columnOverflow 는 붙인 글의 열 수가 들어갈 자리보다 많으면 알림 글을, 아니면 "" 를 돌려준다.
+// 기본 파서는 남는 열을 말없이 버린다 — 행 넘침과 같은 꼴로 알린다 (D3).
+// 들어갈 자리 : 한 칸만 골랐으면 그 칸부터 오른쪽 끝까지 보이는 열, 범위를 골랐으면 범위 너비.
+function columnOverflow(table, text) {
+  const range = table.modules.selectRange && table.modules.selectRange.activeRange;
+  if (!range) return "";
+  const bounds = range.getBounds();
+  if (!bounds.start) return "";
+  const visible = table.columnManager.getVisibleColumnsByIndex();
+  const from = visible.indexOf(bounds.start.column);
+  if (from < 0) return "";
+  const single = bounds.start === bounds.end;
+  const room = single ? visible.length - from : visible.indexOf(bounds.end.column) - from + 1;
+  const width = Math.max(...text.split("\n").map((line) => line.split("\t").length));
+  if (width <= room) return "";
+  const where = single ? "표 오른쪽 끝을" : "고른 범위를";
+  return `붙인 ${width}열 중 ${width - room}열이 ${where} 넘어 버렸다 — 넘친 열은 안 들어갔다`;
+}
+
+// pasteAction 은 기본 range 동작으로 붙인 뒤, 들어가지 못한 행이 있으면 알린다.
+// 행을 늘리지는 않는다 — 새 행엔 id 가 있어야 하는데 붙인 칸에 id 가 없으면 지어내야 하고,
+// 말없이 행이 늘면 git diff 를 읽는 사람이 놀란다 (「UI 는 값을 고쳐 주지 않는다」).
+function pasteAction(rows) {
+  const base = this.constructor.pasteActions && this.constructor.pasteActions.range;
+  if (!base) {
+    toast("붙여넣기 동작을 못 찾았다 — Tabulator 판이 바뀌었는지 본다", true);
+    return [];
+  }
+  const range = this.table.modules.selectRange.activeRange;
+  const single = range && range.getBounds().start === range.getBounds().end;
+  const updated = base.call(this, rows) || [];
+  const lost = rows.length - updated.length;
+  const notes = [];
+  if (lost > 0) {
+    const where = single ? "표 끝을" : "고른 범위를";
+    notes.push(`붙인 ${rows.length}행 중 ${lost}행이 ${where} 넘어 버렸다 — 행 추가 뒤 다시 붙여라`);
+  }
+  if (state.pasteNote) notes.push(state.pasteNote);
+  state.pasteNote = "";
+  if (notes.length) toast(notes.join(" · "), true);
+  return updated;
+}
+
 /* 표 열기·저장 -------------------------------------------------------- */
 
 async function openTable(name) {
@@ -506,6 +585,8 @@ async function openTable(name) {
   await loadAssets(res.body.columns);
 
   if (state.grid) state.grid.destroy();
+  state.active = null;
+  state.activeCell = null;
   state.grid = new Tabulator("#table", {
     data: toGrid(res.body.rows, res.body.columns),
     columns: columnDefs(res.body.columns),
@@ -516,30 +597,74 @@ async function openTable(name) {
     history: true,
     clipboard: true,
     clipboardCopyRowRange: "range",
-    clipboardPasteParser: "range",
-    clipboardPasteAction: "range",
+    clipboardPasteParser: pasteParser,
+    clipboardPasteAction: pasteAction,
     selectableRange: 1,
     selectableRangeColumns: true,
     selectableRangeRows: true,
     selectableRangeClearCells: true,
+    // 정렬은 머리의 화살표만 누른다. 머리 글자를 누르면 열 범위가 서는데, 그 클릭이 정렬까지 하면
+    // 정렬하려던 클릭이 「전 행 범위」를 남겨 행 지우기가 표 전체를 노린다 (리뷰 B · 조사 후보 9).
+    headerSortClickElement: "icon",
     editTriggerEvent: "dblclick",
     rowHeader: { formatter: "rownum", headerSort: false, hozAlign: "center", frozen: true, width: 46, resizable: false },
   });
   state.grid.on("dataChanged", () => setDirty(true));
-  state.grid.on("cellClick", (e, cell) => { state.active = cell.getRow(); });
+  // 한 번에 지운 행 묶음은 Ctrl+Z 한 번에 되살린다 (markDeleteGroup).
+  // 되살린 행은 Tabulator 가 행 위치 번호를 다시 안 매겨서, 그대로 두면 그 행을 눌러 고른 범위가 비어 버린다
+  // (다시 고른 3행을 지우면 1행만 지워졌다 — U6 R2). refreshFilter 가 위치를 다시 매긴다.
+  state.grid.on("historyUndo", (type, component, data) => {
+    if (state.undoing) return; // 아래 replayGroup 의 반복문이 부른 undo 다
+    replayGroup(() => state.grid.undo(), data ? data.groupLeft : 0, type === "rowDelete");
+  });
+  state.grid.on("historyRedo", (type, component, data) => {
+    if (state.undoing) return;
+    replayGroup(() => state.grid.redo(), data ? data.groupRight : 0, type === "rowAdd");
+  });
+  state.grid.on("cellClick", (e, cell) => { state.active = cell.getRow(); state.activeCell = cell; });
+  // 범위는 행이 아니라 「몇째 줄」을 기억한다. 정렬하면 그 줄에 딴 행이 와서, 그대로 두면
+  // 행 지우기가 누르지 않은 행을 지운다 (U6 R4 에서 drop_1000 을 누르고 정렬했더니 drop_2 가 지워졌다).
+  // 정렬 뒤엔 범위를 마지막으로 누른 칸으로 다시 세운다. dataSorted 는 줄 번호를 다시 매기기 전에 오므로 한 박자 미룬다.
+  state.grid.on("dataSorted", () => {
+    const cell = state.activeCell;
+    setTimeout(() => {
+      if (cell && state.grid && state.grid.getRow(cell.getRow().getIndex()) && state.grid.addRange) {
+        state.grid.addRange(cell, cell);
+      }
+    }, 0);
+  });
   state.grid.columns = res.body.columns;
 
   setDirty(false);
   await refreshList();
 }
 
+// replayGroup 은 묶음 기록 하나를 되돌린(다시 한) 뒤 남은 n 개를 반복문으로 마저 돌린다.
+// 재귀로 부르면 2,000행 묶음에서 호출 깊이가 2,000 이 된다. state.undoing 으로 처리기 재진입을 막고,
+// 다시 그리기는 끝에 한 번, 위치 다시 매기기(refreshFilter)도 끝에 한 번만 한다.
+function replayGroup(step, remaining, renumber) {
+  const n = remaining > 0 ? remaining : 0;
+  if (n > 0) {
+    state.undoing = true;
+    state.grid.blockRedraw();
+    try {
+      for (let i = 0; i < n; i++) step();
+    } finally {
+      state.grid.restoreRedraw();
+      state.undoing = false;
+    }
+  }
+  if (renumber || n > 0) state.grid.refreshFilter();
+}
+
 // ref 열이 가리키는 표의 id 목록을 미리 받아 둔다. 드롭다운이 이것으로 뜬다.
+// 못 받았으면 캐시에 안 넣는다 — 다음에 표를 열 때 다시 받는다.
 async function loadRefIDs(columns) {
   const wanted = [...new Set(columns.filter((c) => c.base === "ref").map((c) => c.ref))];
   for (const name of wanted) {
     if (state.ids.has(name)) continue;
     const res = await api(`/api/table/${encodeURIComponent(name)}`);
-    state.ids.set(name, res.body.ok ? res.body.rows.map((r) => r.id).filter(Boolean) : []);
+    if (res.body.ok) state.ids.set(name, res.body.rows.map((r) => r.id).filter(Boolean));
   }
 }
 
@@ -548,8 +673,20 @@ async function refreshList() {
   if (res.body.ok) drawTableList(res.body.tables);
 }
 
+// commitOpenEditor 는 표 안 편집 칸이 열려 있으면 닫아 입력을 확정한다.
+// Tabulator 의 input·number 편집기는 blur 에 값을 넣는다. 다음 프레임까지 기다려야 getData 에 들어간다.
+// 안 하면 편집 중 Ctrl+S 가 고친 글자를 빼고 저장하고 dirty 까지 꺼 버린다 (U6 S7).
+async function commitOpenEditor() {
+  const el = document.activeElement;
+  if (!el || !el.closest || !el.closest("#table .tabulator-cell")) return;
+  if (!["INPUT", "SELECT", "TEXTAREA"].includes(el.tagName)) return;
+  el.blur();
+  await new Promise((done) => requestAnimationFrame(() => setTimeout(done, 0)));
+}
+
 async function save() {
   if (!state.grid) return;
+  await commitOpenEditor();
   const columns = state.grid.columns;
   const rows = fromGrid(state.grid.getData(), columns);
   const res = await api(`/api/table/${encodeURIComponent(state.name)}`, {
@@ -598,6 +735,10 @@ function addRow() {
   state.grid.addRow({ id: nextID() }, false).then((row) => {
     row.scrollTo();
     state.active = row;
+    // 행 지우기는 범위의 행을 지운다. 범위를 새 행으로 옮겨 「방금 더한 행 지우기」가 그대로 되게 한다.
+    const first = row.getCells().find((c) => c.getField());
+    if (first && state.grid.addRange) state.grid.addRange(first, first);
+    state.activeCell = first || null;
     setDirty(true);
   });
 }
@@ -610,15 +751,65 @@ function nextID() {
   }
 }
 
+// deleteRow 는 범위 선택에 든 행을 전부 지운다. 범위가 비었으면 마지막으로 누른 한 행(그것도 없으면 맨 끝 행)을 지운다.
+// 저장 전엔 파일이 안 바뀌고 Ctrl+Z 한 번으로 묶음째 되살아난다 (설계 D4).
+// 다만 범위가 열 하나 전체(전 행)이거나 DELETE_CONFIRM 행을 넘으면 한 번 묻는다 —
+// 머리 클릭 한 번이 표 전체 지우기로 이어지는 사고를 막는다 (리뷰 B).
+const DELETE_CONFIRM = 20;
+
 function deleteRow() {
   if (!state.grid) return;
-  const row = state.active || state.grid.getRows().slice(-1)[0];
-  if (!row) return;
-  const id = row.getData().id || "이름 없는 행";
-  row.delete();
+  // 범위는 늘 하나 있다 (안 눌러도 첫 칸에 기본 범위가 선다). 한 행짜리여도 그 범위의 행을 쓴다.
+  let rows = rangeRows();
+  if (rows.length === 0) {
+    const one = state.active || state.grid.getRows().slice(-1)[0];
+    rows = one ? [one] : [];
+  }
+  if (rows.length === 0) return;
+  const wholeColumn = rows.length > 1 && rows.length === state.grid.getRows("active").length;
+  if ((wholeColumn || rows.length > DELETE_CONFIRM) && !confirm(`${rows.length}행을 지울까?`)) return;
+  const first = rows[0].getData().id || "이름 없는 행";
+
+  const history = state.grid.modules && state.grid.modules.history;
+  const start = history ? history.index + 1 : -1;
+  state.grid.blockRedraw();
+  try {
+    rows.forEach((row) => row.delete());
+  } finally {
+    state.grid.restoreRedraw();
+  }
+  if (history) markDeleteGroup(history.history.slice(start, history.index + 1));
+
   state.active = null;
+  state.activeCell = null;
   setDirty(true);
-  toast(`${id} 을 지웠다 — 되돌리려면 Ctrl+Z, 저장 전까지는 파일이 안 바뀐다`);
+  toast(rows.length === 1
+    ? `${first} 을 지웠다 — 되돌리려면 Ctrl+Z, 저장 전까지는 파일이 안 바뀐다`
+    : `${rows.length}행을 지웠다 — 되돌리려면 Ctrl+Z, 저장 전까지는 파일이 안 바뀐다`);
+}
+
+// rangeRows 는 범위 선택에 든 행을 겹치지 않게 모은다.
+function rangeRows() {
+  const seen = new Set();
+  const rows = [];
+  (state.grid.getRanges ? state.grid.getRanges() : []).forEach((range) => {
+    range.getRows().forEach((row) => {
+      if (seen.has(row)) return;
+      seen.add(row);
+      rows.push(row);
+    });
+  });
+  return rows;
+}
+
+// markDeleteGroup 은 한 번에 지운 행들의 history 기록에 「앞뒤로 몇 개 더」를 적는다.
+// historyUndo·historyRedo 가 이것을 보고 묶음 끝까지 이어서 되돌린다 (openTable 의 on 두 개).
+function markDeleteGroup(entries) {
+  entries.forEach((entry, i) => {
+    if (entry.type !== "rowDelete" || !entry.data) return;
+    entry.data.groupLeft = i;
+    entry.data.groupRight = entries.length - 1 - i;
+  });
 }
 
 /* 시작 ---------------------------------------------------------------- */
@@ -646,9 +837,18 @@ $("addRow").addEventListener("click", addRow);
 $("delRow").addEventListener("click", deleteRow);
 
 document.addEventListener("keydown", (e) => {
-  if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+  // e.key 는 한글 자판·Caps Lock 에서 "ㄴ"·"S" 가 된다. 자리(e.code)로 본다.
+  if ((e.ctrlKey || e.metaKey) && e.code === "KeyS") {
     e.preventDefault();
     save();
+    return;
+  }
+  // 「행 지우기」 단추를 누른 뒤엔 초점이 표 밖이라 Tabulator 의 Ctrl+Z 가 안 듣는다. 표 밖에서도 되돌린다.
+  // 표 안은 Tabulator 가, 글 입력 칸은 브라우저가 맡으므로 건드리지 않는다.
+  const outside = !(e.target.closest && e.target.closest(".tabulator, input, select, textarea"));
+  if (outside && state.grid && (e.ctrlKey || e.metaKey) && (e.code === "KeyZ" || e.code === "KeyY")) {
+    e.preventDefault();
+    if (e.code === "KeyZ") state.grid.undo(); else state.grid.redo();
   }
 });
 

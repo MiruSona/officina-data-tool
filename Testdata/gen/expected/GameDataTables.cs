@@ -47,11 +47,34 @@ namespace MyGame.Data
             return Deserialize(body, MessagePackSerializer.DefaultOptions);
         }
 
+        // 몸통 전체(맵 머리 · 키 · _meta 포함)의 MessagePack 예외와 잘린 파일을 GameDataException 하나로 모은다.
+        // 표 안에서 터진 것은 ReadTable 이 표 이름을 담아 이미 싸 두었으니 그대로 다시 던진다.
         public static GameDataTables Deserialize(ReadOnlyMemory<byte> body, MessagePackSerializerOptions options)
+        {
+            try
+            {
+                return ReadBody(body, options);
+            }
+            catch (GameDataException)
+            {
+                throw;
+            }
+            catch (MessagePackSerializationException e)
+            {
+                throw new GameDataException("구운 파일이 깨졌다 — MessagePack 으로 못 읽는다. datatool export 로 다시 구워라", e);
+            }
+            catch (System.IO.EndOfStreamException e)
+            {
+                throw new GameDataException("구운 파일이 깨졌다 — 중간에 끊겼다. datatool export 로 다시 구워라", e);
+            }
+        }
+
+        private static GameDataTables ReadBody(ReadOnlyMemory<byte> body, MessagePackSerializerOptions options)
         {
             MessagePackReader reader = new MessagePackReader(body);
             string schemaHash = null;
             string builtAt = null;
+            bool metaSeen = false;
             ItemRow[] itemRows = null;
             MonsterRow[] monsterRows = null;
             DropRow[] dropRows = null;
@@ -63,16 +86,22 @@ namespace MyGame.Data
                 switch (key)
                 {
                     case "_meta":
+                        // 해시는 표를 읽기 **전에** 본다. 열 꼴이 바뀐 옛 파일이 MessagePack 예외보다 먼저 우리 예외로 터지게.
                         ReadMeta(ref reader, out schemaHash, out builtAt);
+                        CheckHash(schemaHash);
+                        metaSeen = true;
                         break;
                     case "item":
-                        itemRows = MessagePackSerializer.Deserialize<ItemRow[]>(ref reader, options);
+                        RequireMeta(metaSeen, "item");
+                        itemRows = ReadTable<ItemRow>(ref reader, options, "item");
                         break;
                     case "monster":
-                        monsterRows = MessagePackSerializer.Deserialize<MonsterRow[]>(ref reader, options);
+                        RequireMeta(metaSeen, "monster");
+                        monsterRows = ReadTable<MonsterRow>(ref reader, options, "monster");
                         break;
                     case "drop":
-                        dropRows = MessagePackSerializer.Deserialize<DropRow[]>(ref reader, options);
+                        RequireMeta(metaSeen, "drop");
+                        dropRows = ReadTable<DropRow>(ref reader, options, "drop");
                         break;
                     default:
                         // 모르는 표는 건너뛴다. 새 표가 늘어난 파일을 옛 코드가 읽어도 안 터지게.
@@ -81,12 +110,8 @@ namespace MyGame.Data
                 }
             }
 
-            if (schemaHash != SchemaHash)
-            {
-                throw new GameDataException(
-                    "스키마가 달라졌는데 안 구웠다. 구운 파일 : " + (schemaHash ?? "없음") +
-                    ", 코드 : " + SchemaHash + " — datatool export 를 다시 돌려라");
-            }
+            // 끝 검사 — _meta 가 아예 없던 파일은 여기서 "없음" 으로 던진다.
+            CheckHash(schemaHash);
 
             GameDataTables tables = new GameDataTables();
             tables.BuiltAt = builtAt;
@@ -141,6 +166,39 @@ namespace MyGame.Data
             }
 
             throw new GameDataException(typeof(T).Name + " 은 이 스키마의 표가 아니다");
+        }
+
+        private static void CheckHash(string schemaHash)
+        {
+            if (schemaHash != SchemaHash)
+            {
+                throw new GameDataException(
+                    "스키마가 달라졌는데 안 구웠다. 구운 파일 : " + (schemaHash ?? "없음") +
+                    ", 코드 : " + SchemaHash + " — datatool export 를 다시 돌려라");
+            }
+        }
+
+        // datatool 이 구운 파일은 _meta 가 늘 첫 키다 (맵 키를 정렬해 쓰고 '_' 가 소문자보다 앞).
+        // 표가 먼저 오면 다른 길로 만든 파일이라 해시를 보기 전에 읽지 않는다.
+        private static void RequireMeta(bool metaSeen, string table)
+        {
+            if (metaSeen == false)
+            {
+                throw new GameDataException("_meta 가 표 " + table + " 보다 뒤에 있다 — datatool export 로 다시 구워라");
+            }
+        }
+
+        // 표 하나를 읽는다. MessagePack 예외는 GameDataException 으로 싸서 게임 코드가 예외 하나만 잡게 한다.
+        private static T[] ReadTable<T>(ref MessagePackReader reader, MessagePackSerializerOptions options, string table)
+        {
+            try
+            {
+                return MessagePackSerializer.Deserialize<T[]>(ref reader, options);
+            }
+            catch (MessagePackSerializationException e)
+            {
+                throw new GameDataException("표 " + table + " 을 못 읽었다 — 구운 파일과 코드의 열 꼴이 다르다. datatool gen · export 를 다시 돌려라", e);
+            }
         }
 
         private static void ReadMeta(ref MessagePackReader reader, out string schemaHash, out string builtAt)

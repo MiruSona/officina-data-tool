@@ -79,7 +79,7 @@ func isDefault(col *schema.Column, value []byte) bool {
 
 // canonical 은 값 하나를 정규형 JSON 한 줄로 만든다.
 //
-// 숫자는 json.Number 로 받아 적힌 그대로 남기고(0.05 가 0.05 로 남는다),
+// 숫자는 json.Number 로 받아 JS String(Number) 꼴로 다시 적고(300.0 → 300, number.go),
 // 문자열은 다시 적어 가 같은 이스케이프를 한글 그대로로 편다.
 // HTML 이스케이프는 끈다 — <, >, & 가 < 로 바뀌면 사람이 못 읽는다.
 func canonical(raw json.RawMessage) ([]byte, error) {
@@ -87,6 +87,10 @@ func canonical(raw json.RawMessage) ([]byte, error) {
 	dec.UseNumber()
 	var v any
 	if err := dec.Decode(&v); err != nil {
+		return nil, err
+	}
+	v, err := normalizeNumbers(v)
+	if err != nil {
 		return nil, err
 	}
 

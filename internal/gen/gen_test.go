@@ -280,3 +280,73 @@ func itoa(i int) string {
 	}
 	return string(out)
 }
+
+// D1(2026-10-03 설계 4장): Deserialize 는 _meta 자리에서 바로 해시를 보고, 표는 _meta 뒤에서만 읽고,
+// 표 읽기의 MessagePack 예외를 GameDataException 으로 싼다. 열 꼴이 바뀐 옛 파일(U4b)이
+// MessagePack 예외가 아니라 우리 예외로 터지게 하는 장치다.
+func TestDeserializeChecksHashBeforeTables(t *testing.T) {
+	files, err := Generate(load(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := files["GameDataTables.cs"]
+
+	meta := strings.Index(src, `case "_meta":`)
+	check := strings.Index(src, "CheckHash(schemaHash);")
+	item := strings.Index(src, `case "item":`)
+	if meta < 0 || check < 0 || item < 0 {
+		t.Fatalf("_meta case · CheckHash · item case 중 빠진 것이 있다 (%d %d %d)", meta, check, item)
+	}
+	if !(meta < check && check < item) {
+		t.Errorf("CheckHash 가 _meta case 안, 표 case 앞에 있어야 한다 (%d %d %d)", meta, check, item)
+	}
+	// 끝 검사 — _meta 가 아예 없는 파일도 잡는다. 그래서 CheckHash 호출은 두 번이다.
+	if n := strings.Count(src, "CheckHash(schemaHash);"); n != 2 {
+		t.Errorf("CheckHash 호출이 %d 번이다 — _meta 자리 한 번 + 끝 한 번이어야 한다", n)
+	}
+	for _, want := range []string{
+		`RequireMeta(metaSeen, "item");`,
+		`ReadTable<ItemRow>(ref reader, options, "item")`,
+		"catch (MessagePackSerializationException e)",
+		"private static void CheckHash(string schemaHash)",
+		"private static void RequireMeta(bool metaSeen, string table)",
+	} {
+		if !strings.Contains(src, want) {
+			t.Errorf("생성 코드에 %q 가 없다", want)
+		}
+	}
+	// 표를 직접 Deserialize 하던 옛 줄이 남으면 예외가 안 싸인다.
+	if strings.Contains(src, "MessagePackSerializer.Deserialize<ItemRow[]>") {
+		t.Error("표를 ReadTable 없이 직접 읽는 줄이 남았다")
+	}
+}
+
+// 리뷰 반영(2026-10-03): ReadMapHeader · ReadString · ReadMeta 처럼 표 밖에서 터지는 MessagePack 예외와
+// 잘린 파일(EndOfStreamException)도 GameDataException 으로 싸여야 한다. 몸통은 ReadBody 로 빼고
+// 바깥 Deserialize 가 try 로 감싼다. 우리 예외는 다시 싸지 않도록 맨 앞 catch 에서 그대로 던진다.
+func TestDeserializeWrapsWholeBody(t *testing.T) {
+	files, err := Generate(load(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := files["GameDataTables.cs"]
+
+	pub := strings.Index(src, "public static GameDataTables Deserialize(ReadOnlyMemory<byte> body, MessagePackSerializerOptions options)")
+	try := strings.Index(src, "return ReadBody(body, options);")
+	ours := strings.Index(src, "catch (GameDataException)\n            {\n                throw;")
+	mp := strings.Index(src, "catch (MessagePackSerializationException e)\n            {\n                throw new GameDataException(\"구운 파일이 깨졌다")
+	eos := strings.Index(src, "catch (System.IO.EndOfStreamException e)")
+	body := strings.Index(src, "private static GameDataTables ReadBody(ReadOnlyMemory<byte> body, MessagePackSerializerOptions options)")
+	header := strings.Index(src, "int count = reader.ReadMapHeader();")
+	if pub < 0 || try < 0 || ours < 0 || mp < 0 || eos < 0 || body < 0 || header < 0 {
+		t.Fatalf("감싸는 조각 중 빠진 것이 있다 (pub %d try %d ours %d mp %d eos %d body %d header %d)", pub, try, ours, mp, eos, body, header)
+	}
+	// 순서 : 공개 Deserialize → ReadBody 호출 → 우리 예외 통과 → MessagePack → 잘린 파일 → ReadBody 정의 → 맵 머리 읽기.
+	if !(pub < try && try < ours && ours < mp && mp < eos && eos < body && body < header) {
+		t.Errorf("감싸는 순서가 틀렸다 (pub %d try %d ours %d mp %d eos %d body %d header %d)", pub, try, ours, mp, eos, body, header)
+	}
+	// ReadTable 의 표 이름 문구는 그대로 남는다.
+	if !strings.Contains(src, `"표 " + table + " 을 못 읽었다`) {
+		t.Error("ReadTable 의 표 이름 문구가 사라졌다")
+	}
+}

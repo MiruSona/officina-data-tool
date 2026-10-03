@@ -19,20 +19,32 @@
 
 ## 넣는 차례
 
-1. **MessagePack-CSharp 를 설치한다.** 둘 다 해야 한다 (Unity 2022.3.12f1 이상 — IL2CPP 를
-   C# 소스 제너레이터로 받치는 것이 그 판부터다).
-   - NuGetForUnity 로 `MessagePack` 패키지 설치 (`Window → NuGet → Manage NuGet Packages`)
-   - Package Manager 에서 `Add package from git URL` :
-     `https://github.com/MessagePack-CSharp/MessagePack-CSharp.git?path=src/MessagePack.UnityClient/Assets/Scripts/MessagePack`
-   - 근거 : <https://github.com/MessagePack-CSharp/MessagePack-CSharp#unity-support>
+1. **MessagePack-CSharp 3.1.9 를 넣는다.** 기본 길은 **nupkg 의 dll 을 `Assets/Plugins/MessagePack/` 에 직접 넣기**다
+   (Unity 2022.3.12f1 이상 — IL2CPP 를 C# 소스 제너레이터로 받치는 것이 그 판부터다).
+
+   | 파일 | 패키지 · 판 |
+   | --- | --- |
+   | `MessagePack.dll` | MessagePack 3.1.9 (`lib/netstandard2.1`) |
+   | `MessagePack.Annotations.dll` | MessagePack.Annotations 3.1.9 |
+   | `Microsoft.NET.StringTools.dll` | Microsoft.NET.StringTools 17.11.4 |
+   | `System.Collections.Immutable.dll` | System.Collections.Immutable 8.0.0 |
+   | `System.Runtime.CompilerServices.Unsafe.dll` | System.Runtime.CompilerServices.Unsafe 6.0.0 ← **빼면 컴파일은 되는데 float 열을 읽을 때 터진다** |
+   | `Analyzers/MessagePack.SourceGenerator.dll` + `.meta` | MessagePackAnalyzer 3.1.9 (`analyzers/roslyn4.3/cs`) — `.meta` 는 `Verify/Meta/` 의 것을 쓴다 (`RoslynAnalyzer` 라벨) |
+
+   - **손으로 안 받아도 된다** — `Verify/verify.ps1 -Project <프로젝트> -SkipTests -SkipBuild -SkipPlayer` 가
+     nuget.org 에서 받아 SHA256 을 대조하고(`Verify/Packages.psd1`) 위 자리에 넣는다. 생성 코드·구운 파일도 같이 넣는다.
+   - 다른 길 : NuGetForUnity 로 `MessagePack` 설치. 판은 3.1.9 로 맞춘다.
+   - git URL 패키지(`MessagePack.Unity`)는 **Unity 타입(Vector3·Color 등)을 직렬화할 때만** 넣는다. 우리 행 클래스는 안 쓴다.
+     넣을 때는 `#v3.1.9` 로 판을 고정한다.
+   - 근거 : <https://github.com/MessagePack-CSharp/MessagePack-CSharp#unity-support> · `Docs/Research/2026-10-03-Unity헤드리스검증조사.md`
 2. **생성 폴더를 만든다** — `Assets/_Project/Scripts/Data/Generated/`.
    `datatool gen` 이 이 폴더 안만 쓴다. 로더 셋도 여기 같이 나온다.
    **사람이 여기 있는 파일을 고치지 않는다** (다음 gen 에서 덮인다).
 3. `datatool gen` 을 돌린다. 복사할 것이 없다.
 4. **구운 파일 자리** — `Assets/StreamingAssets/gamedata.bytes` (`datatool export` 산출물).
-5. MessagePack.Unity 가 뜰 때 `MessagePackSerializer.DefaultOptions` 를 스스로 잡아 준다.
-   따로 리졸버를 엮을 일은 없다. IL2CPP 빌드에서 포매터를 못 찾으면 그때
-   `[GeneratedMessagePackResolver] partial class …` 와 `StaticCompositeResolver` 를 얹는다 (U5).
+5. **리졸버를 손으로 엮지 않는다.** `StandardResolver` 가 생성 어셈블리의 `GeneratedMessagePackResolver` 를 찾아 쓴다
+   (Win64 IL2CPP · 6000.3.23f1 · 스트리핑 Minimal/High 에서 확인, 2026-10-03). 모바일에서 포매터를 못 찾으면 그때
+   `[GeneratedMessagePackResolver] partial class …` 와 `StaticCompositeResolver` 를 얹는다.
 
 ## 첫 호출
 
@@ -55,9 +67,9 @@ ItemRow dropped = data.Get<ItemRow>(drop.ItemId); // ref 열은 Get<T> 로 잇�
   이렇게 했다 — IL2CPP 에서 그게 제일 잘 터진다.
 - 스키마만 고치고 안 구웠으면 `Load` 에서 **바로 예외**가 난다 (`schemaHash` 가 다르다).
 
-## 확인 차례 (사람이 봐야 아는 것)
+## 확인 차례
 
-앞이 막히면 뒤는 의미가 없다. 이 차례로 본다.
+앞이 막히면 뒤는 의미가 없다. 이 차례로 본다. **`Verify/verify.ps1` 이 사람 대신 다 판정한다** (아래 「배치모드 검증」).
 
 | # | 무엇 | 합격 |
 | --- | --- | --- |
@@ -65,4 +77,32 @@ ItemRow dropped = data.Get<ItemRow>(drop.ItemId); // ref 열은 Get<T> 로 잇�
 | U2 | `gamedata.bytes` 를 넣고 `Load` 를 부른다 | **Go 가 구운 것을 C# 이 읽는다** ← 진짜 관문 |
 | U3 | 값 몇 개 눈으로 대조 | 한글이 안 깨진다 · float 이 안 어긋난다 · enum 이 맞다 |
 | U4 | 스키마만 고치고 안 구운 채 실행 | `GameDataException` 이 난다 |
+| U4b | 열 타입을 바꾼 스키마로 구운 옛 파일을 읽는다 | MessagePack 예외가 아니라 `GameDataException` 이 난다 |
 | U5 | IL2CPP 빌드 | 리플렉션 없이 돈다 |
+
+## 배치모드 검증 (`Verify/`)
+
+**빈 시험 프로젝트나 사본에서만 돌린다 — Generated · StreamingAssets · Plugins/MessagePack 을 덮어쓴다.**
+그 자리에 우리 것이 아닌 `.cs` 나 다른 판 dll 이 보이면 아무것도 쓰기 전에 멈춘다(종료 2).
+
+```powershell
+.\Verify\verify.ps1 -Project <Unity 프로젝트> [-DataTool <exe>] [-SkipTests] [-SkipBuild] [-SkipPlayer] [-Stripping High] [-EditorTimeoutMin 30] [-Clean]
+```
+
+- 에디터는 `ProjectSettings/ProjectVersion.txt` 의 판으로 `C:\Program Files\Unity\Hub\Editor\<판>\Editor\Unity.exe` 를 찾는다 (`-UnityExe` 가 이긴다).
+  **에디터를 닫고** 돌린다.
+- 차례 : 툴 굽기 → dll 넣기 → `Testdata/table/ok` gen·export → 시험·빌드 코드 복사 → EditMode(U1~U4b) → Win64 IL2CPP 빌드 → 플레이어(U5). 끝에 판정 표.
+- 종료 코드 : **0 통과 · 1 판정 실패(코드를 고칠 일) · 2 환경 문제(기계를 고칠 일).**
+  - 1 : U1~U5 중 하나가 실패했거나, 에디터·빌드가 0 이 아닌 코드로 끝났다.
+  - 2 : 에디터 없음·열려 있음 · nupkg 해시 다름 · 남의 파일 발견 · 잡지 않은 예외(네트워크·zip 등) ·
+    에디터 한 번이 `-EditorTimeoutMin`(기본 30분)을 넘김 · 시험 결과 XML 도 `error CS` 도 없음(라이선스 등).
+- `-DataTool`·`-SkipToolBuild` 로 받은 exe 의 커밋이 지금 소스 커밋과 다르면 경고 한 줄만 낸다(멈추지 않는다).
+- EditMode 는 `-assemblyNames DataToolVerify.Tests` 로 Verify 시험만 돌린다.
+- 넣는 자리 : `Assets/Plugins/MessagePack/` · `Assets/_Project/Scripts/Data/Generated/` · `Assets/StreamingAssets/gamedata.bytes` ·
+  이름에 `DataToolVerify` 가 붙은 셋(`Assets/Tests/` · `Assets/Editor/` · `Assets/DataToolVerify/`). `-Clean` 은 그 셋만 지운다.
+- 빌드 동안 Standalone `scriptingBackend` 를 IL2CPP 로(`-Stripping` 을 주면 스트리핑도) 바꾸고, **끝나면 바꾸기 전 값으로 되돌려 `ProjectSettings` 를 저장한다.**
+  구운 플레이어는 그대로 남는다. Unity 가 `m_BuildTargetBatching` 에 Standalone 줄을 더하는 것은 되돌리지 않는다.
+  시간 넘김으로 에디터를 죽이면 되돌리지 못할 수 있다.
+- 플레이어 탐침은 `-datatoolVerify` 인자가 있을 때만 돈다. 게임 빌드에 섞여도 아무 일 안 한다.
+- 로그·플레이어는 `%TEMP%\datatool-verify-<시각>` 에 남는다. **플레이어 폴더가 약 1.3GB** 라 다 본 뒤 지운다.
+- 2026-10-03 실측 (빈 2D URP 프로젝트 · 6000.3.23f1) : 판정 다섯 다 통과 · 종료 0. EditMode 17~55초 · 첫 빌드 260초(캐시 뒤 26초) · 플레이어 3초.
