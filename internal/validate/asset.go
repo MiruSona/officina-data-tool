@@ -3,6 +3,7 @@ package validate
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 
 	"github.com/mirusona/officina-data-tool/internal/assetindex"
 	"github.com/mirusona/officina-data-tool/internal/schema"
@@ -45,6 +46,21 @@ func (c *checker) checkAsset(row *table.Row, col *schema.Column, where string, r
 	}
 	c.checkAssetKind(row, col, where, m)
 	c.checkAssetBuilt(row, where, m)
+}
+
+// checkAssetDefaults 는 asset 열의 default 를 칸 값과 같은 규칙으로 본다. 표의 행과 상관없이 열마다 한 번.
+// 자리는 schema.json · 줄 0 · 열 「이름.default」 다 (README 「asset 열」 V10 표). 오류·경고를 따로 돌려준다.
+func (c *checker) checkAssetDefaults() ([]*Problem, []*Problem) {
+	spot := &checker{sch: c.sch, st: c.st, ids: c.ids, assets: c.assets, assetWarn: c.assetWarn,
+		t: &table.Table{Name: c.t.Name, Path: filepath.Join(filepath.Dir(c.t.Path), table.SchemaFileName)}}
+	row := &table.Row{}
+	for _, col := range c.st.Columns {
+		if col.Base != schema.TypeAsset || col.Default == nil {
+			continue
+		}
+		spot.checkValue(row, col, col.Name+".default", col.Default)
+	}
+	return spot.list, spot.warns
 }
 
 // checkSub 는 `address[이름]` 의 이름을 본다. 오류를 냈으면 거짓이다.

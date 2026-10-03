@@ -390,4 +390,13 @@ button { font: inherit; color: inherit; }
   color: var(--muted);
   font-size: 11px;
 }
+.tabulator .asset-list { gap: 4px; }
+.tabulator .asset-more {
+  flex: none;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 11px;
+}
 .tabulator .asset-missing .asset-name { color: var(--danger); text-decoration: underline dotted; }

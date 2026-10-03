@@ -106,9 +106,10 @@ function drawProblems(problems, warnings = []) {
     button.className = isWarning ? "row warn" : "row";
     const where = document.createElement("span");
     where.className = "where";
+    // 줄 0 이어도 열이 있으면(스키마 default 검사) 표.열 을 같이 보인다.
     where.textContent = p.line
       ? `${fileName(p.file)}:${p.line} — ${p.table}.${p.column || "행"}`
-      : fileName(p.file);
+      : p.column ? `${fileName(p.file)} — ${p.table}.${p.column}` : fileName(p.file);
     const what = document.createElement("span");
     what.className = "what";
     what.textContent = isWarning ? `경고 · ${p.message}` : p.message;
@@ -124,6 +125,10 @@ const fileName = (path) => String(path || "").split(/[\\/]/).pop();
 /* 문제 → 그 칸으로 ---------------------------------------------------- */
 
 async function jumpTo(problem) {
+  if (!problem.line && problem.column) {
+    toast(`${fileName(problem.file)} 의 ${problem.table}.${problem.column} 이다 — 표가 아니라 스키마에서 고친다`, true);
+    return;
+  }
   if (problem.table && problem.table !== state.name) {
     await openTable(problem.table);
   }
@@ -146,7 +151,7 @@ function markBad(problems) {
     row.getCells().forEach((cell) => cell.getElement().classList.remove("bad"));
   });
   problems.forEach((p) => {
-    if (p.table !== state.name || !p.column) return;
+    if (p.table !== state.name || !p.column || !p.line) return; // 줄 0(스키마 default)은 표에 칸이 없다
     const row = state.grid.getRow(p.row);
     const cell = row && row.getCell(p.column);
     if (cell) cell.getElement().classList.add("bad");
@@ -209,10 +214,12 @@ function numberColumn(def, col) {
 }
 
 // list<T> 는 화면에서 쉼표로 이은 한 줄로 다룬다. 배열로 되돌리는 것은 저장할 때다.
+// list<asset> 은 편집은 같고 보기만 항목마다 그림·▶ 를 앞에 붙인다.
 function listColumn(def, col) {
+  if (col.base === "asset") def.formatter = (cell) => assetListCell(cell.getValue());
   return Object.assign(def, {
     editor: "input",
-    headerTooltip: `${col.type} — 쉼표로 나눠 적는다`,
+    headerTooltip: `${col.type}${col.kind ? " · " + col.kind : ""} — 쉼표로 나눠 적는다`,
   });
 }
 
@@ -288,6 +295,49 @@ function assetCell(value) {
   tag.className = "kindtag";
   tag.textContent = found.entry.kind;
   box.append(label, tag);
+  return box;
+}
+
+// list<asset> 칸에 미리보기를 그리는 항목 수. 넘치면 「+N」 을 붙인다.
+const ASSET_LIST_PREVIEWS = 3;
+
+// assetListCell 은 항목마다 그림·▶ 를 나란히 두고 칸 글자를 그대로 뒤에 둔다. 못 찾은 항목이 있으면 빨갛게.
+function assetListCell(value) {
+  const box = document.createElement("span");
+  box.className = "asset asset-list";
+  if (value === undefined || value === null || value === "") return box;
+  const items = listValue(value, "asset");
+  const ready = state.assets && state.assets.ok;
+  let shown = 0;
+  let more = 0;
+  let missing = false;
+  (Array.isArray(items) ? items : []).forEach((item) => {
+    const found = ready && typeof item === "string" && item !== "" ? findAsset(item) : null;
+    if (!found) {
+      missing = true;
+      return;
+    }
+    const preview = found.entry.preview;
+    if (preview !== "image" && preview !== "audio") return;
+    if (shown >= ASSET_LIST_PREVIEWS) {
+      more += 1;
+      return;
+    }
+    box.append(preview === "image" ? assetThumb(item, found.rect) : assetPlay(item));
+    shown += 1;
+  });
+  if (more > 0) {
+    const tag = document.createElement("span");
+    tag.className = "asset-more";
+    tag.textContent = `+${more}`;
+    tag.title = `미리보기 ${more}개 더`;
+    box.append(tag);
+  }
+  if (ready && !state.assets.missing && (missing || !Array.isArray(items))) box.classList.add("asset-missing");
+  const label = document.createElement("span");
+  label.className = "asset-name";
+  label.textContent = value;
+  box.append(label);
   return box;
 }
 

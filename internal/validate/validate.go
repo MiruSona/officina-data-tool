@@ -27,7 +27,7 @@ const MaxPerTable = 100
 //	V6 ref               checkRef
 //	V7 id 중복·꼴         checkID
 //	V9 list<T> 원소       checkList
-//	V10 asset            checkAsset (asset.go)
+//	V10 asset            checkAsset · checkAssetDefaults (asset.go)
 //
 // V1(JSON 이 깨졌나)과 V8(파일 이름 = 표 이름)은 table 묶음이 읽을 때 이미 막는다.
 
@@ -76,8 +76,10 @@ func RunWith(sch *schema.File, tables map[string]*table.Table, opt Options) ([]*
 		order := columnOrder(c.st)
 		sortProblems(c.list, order)
 		sortProblems(c.warns, order)
-		problems = append(problems, cut(c.list, t)...)
-		warnings = append(warnings, cut(c.warns, t)...)
+		// default 문제(스키마 자리)는 칸 문제 앞에 둔다 — 칸 문제가 넘쳐도 자르기에 안 잘린다.
+		defaults, defaultWarns := c.checkAssetDefaults()
+		problems = append(problems, cut(append(defaults, c.list...), t)...)
+		warnings = append(warnings, cut(append(defaultWarns, c.warns...), t)...)
 	}
 	return problems, warnings
 }
