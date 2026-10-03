@@ -184,12 +184,12 @@ function columnDefs(columns) {
         });
       case "enum":
         return Object.assign(def, {
-          editor: "list", editorParams: { values: state.schema.enums[col.enum] || [] },
+          editor: "list", editorParams: { values: state.schema.enums[col.enum] || [], itemFormatter: listItemText },
         });
       case "ref":
         return Object.assign(def, {
           editor: "list",
-          editorParams: { values: state.ids.get(col.ref) || [], autocomplete: true, freetext: true },
+          editorParams: { values: state.ids.get(col.ref) || [], autocomplete: true, freetext: true, itemFormatter: listItemText },
         });
       case "asset":
         return assetColumn(def, col);
@@ -198,6 +198,14 @@ function columnDefs(columns) {
     }
   });
   return defs;
+}
+
+// listItemText 는 list 편집기(enum·ref·asset) 드롭다운 한 줄을 글자로만 넣는다.
+// 벤더 기본은 innerHTML 이라 주소·값에 든 태그가 토큰을 쥔 페이지에서 돈다 (XSS).
+function listItemText(label) {
+  const span = document.createElement("span");
+  span.textContent = label === undefined || label === null ? "" : String(label);
+  return span;
 }
 
 function columnTitle(col) {
@@ -231,23 +239,25 @@ function listColumn(def, col) {
 // asset 칸 : 보기는 그림·▶·글자, 편집은 열 kind 로 거른 주소 드롭다운. freetext 라 색인이 낡아도 적힌다.
 function assetColumn(def, col) {
   return Object.assign(def, {
-    formatter: (cell) => assetCell(cell.getValue()),
+    formatter: (cell) => assetCell(cell.getValue(), cell),
     editor: "list",
     editorParams: {
       values: assetChoices(col.kind), autocomplete: true, freetext: true,
-      allowEmpty: true, listOnEmpty: true,
+      allowEmpty: true, listOnEmpty: true, itemFormatter: listItemText,
     },
     headerTooltip: col.desc || `${col.type}${col.kind ? " · " + col.kind : ""} — Addressables 주소 (하위는 주소[이름])`,
   });
 }
 
 // assetChoices 는 드롭다운 값이다. 하위 이름이 있으면 주소[이름] 도 넣는다.
+// 아틀라스는 kind 가 other 여도 그 스프라이트(주소[이름])는 image 열에 넣는다. 맨 주소는 image 열에서 빠진다.
 function assetChoices(kind) {
   if (!state.assets || !state.assets.ok) return [];
   const values = new Set();
   state.assets.entries.forEach((e) => {
-    if (kind && e.kind !== kind) return;
-    values.add(e.address);
+    const spritesOnly = kind === "image" && e.atlas;
+    if (kind && e.kind !== kind && !spritesOnly) return;
+    if (!spritesOnly) values.add(e.address);
     e.sub.forEach((name) => values.add(`${e.address}[${name}]`));
   });
   return [...values];
@@ -260,23 +270,48 @@ function splitSub(value) {
   return [value.slice(0, open), value.slice(open + 1, -1)];
 }
 
-// findAsset 은 칸 값으로 항목과 하위 rect 를 찾는다. 서버의 Find·pickEntry 와 같은 차례다 —
-// 같은 주소 여럿이면 미리보기가 되고 (하위면) 그 이름을 가진 항목을 먼저 고른다.
+// subRect 는 rect 의 w·h 가 0 이면 그림 전체(null)로 바꾼다 (계약 1판 덧붙임 : 단일 스프라이트).
+function subRect(r) {
+  return r && r.w > 0 && r.h > 0 ? r : null;
+}
+
+// findAsset 은 칸 값으로 그릴 것을 찾는다 : {entry, preview, fetch(받을 주소), rect, tag, caption(크게 보기 글줄 앞)}.
+// 하위 이름이 어느 항목에도 없으면 {missing: true} 다. 하위의 미리보기는 sub 마다 따로다.
 function findAsset(value) {
   const exact = state.assetMap.get(value);
-  if (exact) return { entry: exact.find((e) => e.preview !== "none") || exact[0], rect: null };
+  if (exact) {
+    const atlas = exact.find((e) => e.atlas && (e.rects || []).some((r) => r.preview === "image"));
+    if (atlas) {
+      // 맨 아틀라스는 첫 스프라이트를 보이고 「N장」 을 단다.
+      const first = atlas.rects.find((r) => r.preview === "image");
+      const n = atlas.rects.length;
+      return { entry: atlas, preview: "image", fetch: `${value}[${first.name}]`, rect: subRect(first.rect),
+        tag: `${n}장`, caption: `${value} · ${n}장 중 ${first.name}`, atlas: { address: value, entry: atlas, current: null } };
+    }
+    const entry = exact.find((e) => e.preview !== "none") || exact[0];
+    return { entry, preview: entry.preview, fetch: value, rect: null, tag: entry.kind, caption: value };
+  }
   const parts = splitSub(value);
   if (!parts) return null;
   const list = state.assetMap.get(parts[0]);
   if (!list) return null;
-  for (const e of list) {
+  // 서버 pickTarget 과 같은 차례 : 하위 목록을 알지만 그 이름이 없는 항목은 빼고, 미리보기가 되는 첫 후보.
+  // 목록을 모르는 항목(subKnown 거짓)은 후보로 남아 서버처럼 항목 파일을 보인다.
+  const cands = [];
+  list.forEach((e) => {
     const sub = (e.rects || []).find((r) => r.name === parts[1]);
-    if (sub && e.preview !== "none") return { entry: e, rect: sub.rect };
-  }
-  return { entry: list.find((e) => e.preview !== "none") || list[0], rect: null };
+    if (e.subKnown && !sub) return;
+    cands.push({ e, sub, preview: sub ? sub.preview : e.preview });
+  });
+  if (cands.length === 0) return { entry: list[0], missing: true };
+  const c = cands.find((x) => x.preview !== "none") || cands[0];
+  const atlas = c.e.atlas && c.e.subKnown && c.sub ? { address: parts[0], entry: c.e, current: parts[1] } : null;
+  return { entry: c.e, preview: c.preview, fetch: value, rect: c.sub ? subRect(c.sub.rect) : null,
+    tag: c.e.atlas ? "sprite" : c.e.kind, caption: value, atlas };
 }
 
-function assetCell(value) {
+// assetCell 은 asset 칸 하나다. cell 이 오면 아틀라스 격자 창에서 「이 칸에 넣기」 로 그 칸을 바꿀 수 있다.
+function assetCell(value, cell = null) {
   const box = document.createElement("span");
   box.className = "asset";
   if (value === undefined || value === null || value === "") return box;
@@ -284,19 +319,29 @@ function assetCell(value) {
   label.className = "asset-name";
   label.textContent = value;
   const found = state.assets && state.assets.ok ? findAsset(String(value)) : null;
-  if (!found) {
+  if (!found || found.missing) {
     if (state.assets && state.assets.ok && !state.assets.missing) box.classList.add("asset-missing");
+    if (found) box.title = "색인에 없는 하위 이름이다";
     box.append(label);
     return box;
   }
-  if (found.entry.preview === "image") {
-    box.append(assetThumb(value, found.rect));
-  } else if (found.entry.preview === "audio") {
+  const atlas = found.atlas ? { ...found.atlas, cell } : null;
+  if (found.preview === "image") {
+    box.append(assetThumb(found.fetch, found.rect, found.caption, atlas));
+  } else if (found.preview === "audio") {
     box.append(assetPlay(value));
   }
   const tag = document.createElement("span");
   tag.className = "kindtag";
-  tag.textContent = found.entry.kind;
+  tag.textContent = found.tag;
+  if (found.entry.atlas) tag.title = `아틀라스 · 스프라이트 ${found.entry.rects.length}장`;
+  if (atlas && !atlas.current && canGrid(atlas.entry)) {
+    // 맨 아틀라스의 「N장」 도 격자 창을 연다. 칸 편집기가 같이 열리지 않게 막는다.
+    tag.classList.add("zoomable");
+    tag.title += " — 눌러서 전부 보기";
+    tag.addEventListener("click", () => openGrid(atlas));
+    ["mousedown", "click", "dblclick"].forEach((type) => tag.addEventListener(type, (e) => e.stopPropagation()));
+  }
   box.append(label, tag);
   return box;
 }
@@ -304,36 +349,35 @@ function assetCell(value) {
 // list<asset> 칸에 미리보기를 그리는 항목 수. 넘치면 「+N」 을 붙인다.
 const ASSET_LIST_PREVIEWS = 3;
 
-// assetListCell 은 항목마다 그림·▶ 를 나란히 두고 칸 글자를 그대로 뒤에 둔다. 못 찾은 항목이 있으면 빨갛게.
+// assetListCell 은 앞에서부터 미리보기 되는 원소 3개를 나란히 두고, 안 보인 원소 전부(미리보기 없는 것 포함)를 「+N」 으로 센다.
+// 칸 글자는 그대로 뒤에 둔다. 못 찾은 원소가 있으면 빨갛게.
 function assetListCell(value) {
   const box = document.createElement("span");
   box.className = "asset asset-list";
   if (value === undefined || value === null || value === "") return box;
   const items = listValue(value, "asset");
+  const list = Array.isArray(items) ? items : [];
   const ready = state.assets && state.assets.ok;
   let shown = 0;
-  let more = 0;
   let missing = false;
-  (Array.isArray(items) ? items : []).forEach((item) => {
+  list.forEach((item) => {
     const found = ready && typeof item === "string" && item !== "" ? findAsset(item) : null;
-    if (!found) {
+    if (!found || found.missing) {
       missing = true;
       return;
     }
-    const preview = found.entry.preview;
-    if (preview !== "image" && preview !== "audio") return;
-    if (shown >= ASSET_LIST_PREVIEWS) {
-      more += 1;
-      return;
-    }
-    box.append(preview === "image" ? assetThumb(item, found.rect) : assetPlay(item));
+    const preview = found.preview;
+    if ((preview !== "image" && preview !== "audio") || shown >= ASSET_LIST_PREVIEWS) return;
+    const atlas = found.atlas ? { ...found.atlas, cell: null } : null;
+    box.append(preview === "image" ? assetThumb(found.fetch, found.rect, found.caption, atlas) : assetPlay(item));
     shown += 1;
   });
+  const more = list.length - shown;
   if (more > 0) {
     const tag = document.createElement("span");
     tag.className = "asset-more";
     tag.textContent = `+${more}`;
-    tag.title = `미리보기 ${more}개 더`;
+    tag.title = `안 보인 원소 ${more}개`;
     box.append(tag);
   }
   if (ready && !state.assets.missing && (missing || !Array.isArray(items))) box.classList.add("asset-missing");
@@ -348,8 +392,10 @@ function assetListCell(value) {
 const assetBlobs = new Map();
 
 // 못 받은 것(null)은 캐시하지 않는다 — 색인을 고친 뒤 다시 받을 수 있게.
-function assetBlob(address) {
-  if (!assetBlobs.has(address)) {
+// src(그림 파일 guid)가 있으면 그것을 열쇠로 써서, 같은 원본을 쓰는 스프라이트 여럿을 한 번만 받는다.
+function assetBlob(address, src) {
+  const key = src ? `src:${src}` : address;
+  if (!assetBlobs.has(key)) {
     const pending = fetch(`/api/asset?address=${encodeURIComponent(address)}`, {
       headers: { "X-Datatool-Token": TOKEN },
     }).then((res) => {
@@ -357,12 +403,12 @@ function assetBlob(address) {
       if (!res.ok || type.startsWith("application/json")) return null;
       return res.blob().then((b) => URL.createObjectURL(b));
     }).catch(() => null).then((url) => {
-      if (!url && assetBlobs.get(address) === pending) assetBlobs.delete(address);
+      if (!url && assetBlobs.get(key) === pending) assetBlobs.delete(key);
       return url;
     });
-    assetBlobs.set(address, pending);
+    assetBlobs.set(key, pending);
   }
-  return assetBlobs.get(address);
+  return assetBlobs.get(key);
 }
 
 // clearAssetBlobs 는 색인을 다시 읽을 때 받아 둔 파일을 버린다.
@@ -371,27 +417,207 @@ function clearAssetBlobs() {
   assetBlobs.clear();
 }
 
-// assetThumb 는 32px 그림이다. 하위 에셋이면 rect 칸만 보인다 — rect 의 y 는 아래에서 재므로 뒤집는다.
-function assetThumb(value, rect) {
-  const SIZE = 32;
+// paintThumb 는 url 그림을 size 칸 안에 rect 만 잘라 배경으로 그린다 — rect 의 y 는 아래에서 재므로 뒤집는다.
+// whole 이면 키울 때 정수 배라 픽셀이 안 뭉개진다(격자 타일). 다 그리면 done(원본 칸 너비, 높이).
+function paintThumb(thumb, url, rect, size, done, whole = true) {
+  if (!url) return;
+  const img = new Image();
+  img.onload = () => {
+    const r = rect || { x: 0, y: 0, w: img.naturalWidth, h: img.naturalHeight };
+    const fit = size / Math.max(r.w, r.h, 1);
+    const scale = whole && fit >= 1 ? Math.floor(fit) : fit;
+    const top = img.naturalHeight - (r.y + r.h);
+    thumb.style.backgroundImage = `url("${url}")`;
+    thumb.style.backgroundSize = `${img.naturalWidth * scale}px ${img.naturalHeight * scale}px`;
+    thumb.style.backgroundPosition = `${-r.x * scale}px ${-top * scale}px`;
+    thumb.style.width = `${r.w * scale}px`;
+    thumb.style.height = `${r.h * scale}px`;
+    if (done) done(r.w, r.h);
+  };
+  img.src = url;
+}
+
+// assetThumb 는 받을 주소 value 의 32px 그림이다. 하위 에셋이면 rect 칸만 보인다.
+// caption 은 크게 보기 글줄 앞부분이다. atlas 가 오면 맨 아틀라스(current 없음)는 격자 창을, 스프라이트는 「전부 보기」 단추가 있는 크게 보기를 연다.
+function assetThumb(value, rect, caption = value, atlas = null) {
   const thumb = document.createElement("span");
   thumb.className = "asset-thumb";
-  assetBlob(String(value)).then((url) => {
-    if (!url) return;
-    const img = new Image();
-    img.onload = () => {
-      const r = rect || { x: 0, y: 0, w: img.naturalWidth, h: img.naturalHeight };
-      const scale = SIZE / Math.max(r.w, r.h, 1);
-      const top = img.naturalHeight - (r.y + r.h);
-      thumb.style.backgroundImage = `url("${url}")`;
-      thumb.style.backgroundSize = `${img.naturalWidth * scale}px ${img.naturalHeight * scale}px`;
-      thumb.style.backgroundPosition = `${-r.x * scale}px ${-top * scale}px`;
-      thumb.style.width = `${r.w * scale}px`;
-      thumb.style.height = `${r.h * scale}px`;
-    };
-    img.src = url;
-  });
+  assetBlob(String(value)).then((url) => paintThumb(thumb, url, rect, 32, () => {
+    thumb.classList.add("zoomable");
+    thumb.title = atlas && !atlas.current ? "아틀라스 전부 보기" : "크게 보기";
+    thumb.onclick = () => (atlas && !atlas.current ? openGrid(atlas) : openZoom(String(caption), url, rect, atlas));
+  }, false));
+  // 칸의 범위 고르기·편집(더블클릭)이 시작되지 않게 마우스 이벤트를 칸까지 안 올린다. 그림이 안 떴으면 칸에 맡긴다.
+  ["mousedown", "click", "dblclick"].forEach((type) => thumb.addEventListener(type, (e) => {
+    if (thumb.classList.contains("zoomable")) e.stopPropagation();
+  }));
   return thumb;
+}
+
+/* 크게 보기 (사용자 피드백 2026-10-03) -------------------------------- */
+
+const zoom = { box: null, keyGuard: null };
+
+// openOverlay 는 크게 보기·격자 창이 같이 쓰는 덮개다. 닫기 규칙(Esc·바깥 누르기)과 키 막기를 한 곳에 둔다.
+// 열려 있는 동안 표의 키(붙여넣기·지우기·Ctrl+Z 등)가 먹지 않게 창 단계에서 먼저 막는다. 덮개 안 단추의 Enter·Space 만 보낸다.
+function openOverlay(label) {
+  closeZoom();
+  const box = document.createElement("div");
+  box.className = "zoom";
+  box.setAttribute("role", "dialog");
+  box.setAttribute("aria-modal", "true");
+  box.setAttribute("aria-label", label);
+  box.addEventListener("click", (e) => { if (e.target === box) closeZoom(); });
+  document.body.append(box);
+  zoom.box = box;
+  zoom.keyGuard = (e) => {
+    if (e.type === "keydown" && e.key === "Escape") closeZoom();
+    if (e.type === "keydown" && (e.key === "Enter" || e.key === " ") && e.target instanceof HTMLButtonElement && box.contains(e.target)) return;
+    e.stopImmediatePropagation();
+    e.preventDefault();
+  };
+  ["keydown", "paste", "copy", "cut"].forEach((type) => window.addEventListener(type, zoom.keyGuard, true));
+  return box;
+}
+
+function overlayButton(text, className, onClick) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = `btn ${className}`;
+  button.textContent = text;
+  button.addEventListener("click", onClick);
+  return button;
+}
+
+// openZoom 은 덮개 위에 그림을 화면 80% 안으로 키워 띄운다. 키울 때는 정수 배라 픽셀이 안 뭉개진다.
+// 하위 에셋은 썸네일처럼 rect 칸만 잘라 보인다 (rect 의 y 는 아래에서 잰다).
+// atlas({address, entry, current, cell}) 가 오면 「아틀라스 전부 보기」 단추로 격자 창에 넘어간다.
+function openZoom(address, url, rect, atlas) {
+  const box = openOverlay("크게 보기");
+  const frame = document.createElement("div");
+  frame.className = "zoom-frame";
+  const img = document.createElement("img");
+  img.className = "zoom-img";
+  img.alt = "";
+  frame.append(img);
+  const caption = document.createElement("p");
+  caption.className = "zoom-caption";
+  const buttons = document.createElement("div");
+  buttons.className = "zoom-buttons";
+  if (atlas && canGrid(atlas.entry)) buttons.append(overlayButton("아틀라스 전부 보기", "zoom-all", () => openGrid(atlas)));
+  const close = overlayButton("닫기", "zoom-close", closeZoom);
+  buttons.append(close);
+  box.append(frame, caption, buttons);
+  img.onload = () => {
+    const r = rect || { x: 0, y: 0, w: img.naturalWidth, h: img.naturalHeight };
+    const fit = Math.min((window.innerWidth * 0.8) / Math.max(r.w, 1), (window.innerHeight * 0.8 - 60) / Math.max(r.h, 1));
+    const scale = fit >= 1 ? Math.floor(fit) : fit;
+    frame.style.width = `${r.w * scale}px`;
+    frame.style.height = `${r.h * scale}px`;
+    img.style.width = `${img.naturalWidth * scale}px`;
+    img.style.height = `${img.naturalHeight * scale}px`;
+    img.style.left = `${-r.x * scale}px`;
+    img.style.top = `${-(img.naturalHeight - (r.y + r.h)) * scale}px`;
+    caption.textContent = `${address} · ${r.w}×${r.h}`;
+  };
+  img.src = url;
+  close.focus();
+}
+
+/* 아틀라스 격자 훑어보기 (사용자 요청 2026-10-03 「그림을 보면서 스프라이트를 고르고 싶다」) ---- */
+
+// canGrid : sub 목록을 알고 1개 이상일 때만 격자를 연다.
+function canGrid(entry) {
+  return !!entry && entry.atlas && entry.subKnown && (entry.rects || []).length > 0;
+}
+
+const GRID_THUMB = 64;
+
+// openGrid 는 아틀라스 한 개의 스프라이트 전부를 타일 격자로 띄운다. 타일을 누르면 고르기만 하고,
+// 「이 칸에 넣기」 를 눌러야 칸 값이 `주소[이름]` 으로 바뀐다 (잘못 눌러 바뀌는 것을 막는다). 타일 두 번 누르기 = 넣기.
+// ctx.cell 이 없으면(list 칸) 보기만 한다 — 어느 원소를 바꿀지 모호해서다.
+function openGrid(ctx) {
+  if (!canGrid(ctx.entry)) return;
+  const rects = ctx.entry.rects;
+  const box = openOverlay("아틀라스 전부 보기");
+  const panel = document.createElement("div");
+  panel.className = "atlas-panel";
+  const head = document.createElement("p");
+  head.className = "atlas-head";
+  head.textContent = `${ctx.address} · ${rects.length}장`;
+  const grid = document.createElement("div");
+  grid.className = "atlas-grid";
+  const info = document.createElement("p");
+  info.className = "atlas-info";
+  info.textContent = "스프라이트를 누르면 고른다";
+  const buttons = document.createElement("div");
+  buttons.className = "zoom-buttons";
+  let picked = null;
+
+  const put = ctx.cell ? overlayButton("이 칸에 넣기", "primary atlas-put", () => putPicked()) : null;
+  const big = overlayButton("크게 보기", "atlas-zoom", () => {
+    if (!picked) return;
+    const name = picked.sub.name;
+    picked.url.then((url) => { if (url) openZoom(`${ctx.address}[${name}]`, url, subRect(picked.sub.rect), { ...ctx, current: name }); });
+  });
+  const close = overlayButton("닫기", "zoom-close", closeZoom);
+  [put, big].forEach((b) => { if (b) b.disabled = true; });
+  buttons.append(...[put, big, close].filter(Boolean));
+
+  const putPicked = () => {
+    if (!picked || !ctx.cell) return;
+    ctx.cell.setValue(`${ctx.address}[${picked.sub.name}]`);
+    closeZoom();
+  };
+  const pick = (tile) => {
+    grid.querySelectorAll(".atlas-tile.selected").forEach((t) => { t.classList.remove("selected"); t.setAttribute("aria-pressed", "false"); });
+    tile.el.classList.add("selected");
+    tile.el.setAttribute("aria-pressed", "true");
+    picked = tile;
+    const r = subRect(tile.sub.rect);
+    const size = r ? `${r.w}×${r.h}` : tile.el.dataset.size || "?";
+    info.textContent = `${tile.sub.name} · ${size}`;
+    [put, big].forEach((b) => { if (b) b.disabled = false; });
+  };
+
+  let first = null;
+  rects.forEach((sub) => {
+    const el = document.createElement("button");
+    el.type = "button";
+    el.className = "atlas-tile";
+    el.setAttribute("aria-pressed", "false");
+    el.title = sub.name;
+    const thumb = document.createElement("span");
+    thumb.className = "asset-thumb";
+    const name = document.createElement("span");
+    name.className = "atlas-name";
+    name.textContent = sub.name;
+    el.append(thumb, name);
+    const fetchAddress = `${ctx.address}[${sub.name}]`;
+    const tile = { el, sub, url: sub.preview === "image" ? assetBlob(fetchAddress, sub.src) : Promise.resolve(null) };
+    tile.url.then((url) => paintThumb(thumb, url, subRect(sub.rect), GRID_THUMB, (w, h) => { el.dataset.size = `${w}×${h}`; }));
+    el.addEventListener("click", () => pick(tile));
+    el.addEventListener("dblclick", () => { pick(tile); putPicked(); });
+    grid.append(el);
+    if (sub.name === ctx.current) first = tile;
+  });
+  panel.append(head, grid, info, buttons);
+  box.append(panel);
+  if (first) {
+    pick(first);
+    first.el.scrollIntoView({ block: "nearest" });
+    first.el.focus();
+  } else {
+    close.focus();
+  }
+}
+
+function closeZoom() {
+  if (!zoom.box) return;
+  ["keydown", "paste", "copy", "cut"].forEach((type) => window.removeEventListener(type, zoom.keyGuard, true));
+  zoom.box.remove();
+  zoom.box = null;
+  zoom.keyGuard = null;
 }
 
 // 소리는 <audio> 하나로 튼다. 다른 칸을 누르면 앞 소리는 멈춘다.

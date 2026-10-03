@@ -79,8 +79,26 @@ func (c *checker) checkSub(row *table.Row, where string, m assetindex.Match) boo
 			fmt.Sprintf("%q 의 하위 목록을 색인이 몰라 [%q] 를 못 봤다", m.Address, m.Sub))
 		return true
 	}
-	c.v10(row, where, RuleAsset, fmt.Sprintf("%q 에 하위 에셋 %q 가 없다", m.Address, m.Sub))
+	message := fmt.Sprintf("%q 에 하위 에셋 %q 가 없다", m.Address, m.Sub)
+	names := map[string]int{}
+	for _, e := range m.Entries {
+		for _, s := range e.Sub {
+			names[s.Name] = 0
+		}
+	}
+	if near := nearest(m.Sub, names); near != "" {
+		message += fmt.Sprintf(" (가장 가까운 것: %q)", near)
+	}
+	c.v10(row, where, RuleAsset, message)
 	return false
+}
+
+// assetKindOf 는 열 kind 와 맞춰 볼 항목 kind 다. 아틀라스 `주소[이름]` 은 스프라이트라 image 로 본다.
+func assetKindOf(e *assetindex.Entry, m assetindex.Match) string {
+	if m.HasSub && e.IsAtlas() && (e.Sub == nil || e.HasSub(m.Sub)) {
+		return assetindex.KindImage
+	}
+	return e.Kind
 }
 
 // checkAssetKind 는 path 가 있는 항목만 놓고 하나라도 열 kind 와 맞으면 통과다.
@@ -94,7 +112,7 @@ func (c *checker) checkAssetKind(row *table.Row, col *schema.Column, where strin
 		if e.Path == "" {
 			continue
 		}
-		if e.Kind == col.Kind {
+		if assetKindOf(e, m) == col.Kind {
 			return
 		}
 		if first == nil {
@@ -104,8 +122,11 @@ func (c *checker) checkAssetKind(row *table.Row, col *schema.Column, where strin
 	if first == nil {
 		return
 	}
-	c.v10(row, where, RuleAssetKind,
-		fmt.Sprintf("%s 가 와야 하는데 %s(%q) 이다", col.Kind, first.Kind, first.Path))
+	message := fmt.Sprintf("%s 가 와야 하는데 %s(%q) 이다", col.Kind, first.Kind, first.Path)
+	if first.IsAtlas() && col.Kind == assetindex.KindImage {
+		message += fmt.Sprintf(" — 아틀라스다. 스프라이트를 쓰려면 %q 꼴로 적는다", m.Address+"[이름]")
+	}
+	c.v10(row, where, RuleAssetKind, message)
 }
 
 // v10 은 V10 오류 하나를 모은다. serve 저장 때는 경고 쪽으로 간다.

@@ -18,5 +18,17 @@
   {"address": "esc_inner", "guid": "b0000000000000000000000000000002", "path": "Assets/../../x.png", "kind": "image", "group": "G", "includeInBuild": true, "labels": []},
   {"address": "esc_abs", "guid": "b0000000000000000000000000000003", "path": "C:/Windows/win.ini", "kind": "other", "group": "G", "includeInBuild": true, "labels": []},
   {"address": "esc_prefix", "guid": "b0000000000000000000000000000004", "path": "ProjectSettings/x.png", "kind": "image", "group": "G", "includeInBuild": true, "labels": []},
-  {"address": "esc_link", "guid": "b0000000000000000000000000000005", "path": "Assets/Link/secret.png", "kind": "image", "group": "G", "includeInBuild": true, "labels": []}
+  {"address": "esc_link", "guid": "b0000000000000000000000000000005", "path": "Assets/Link/secret.png", "kind": "image", "group": "G", "includeInBuild": true, "labels": []},
+  {"address": "ui_atlas", "guid": "c0000000000000000000000000000001", "path": "Assets/Art/ui.spriteatlasv2", "kind": "other", "group": "G", "includeInBuild": true, "labels": [],
+   "sub": [{"name": "btn_ok", "rect": {"x": 0, "y": 0, "w": 0, "h": 0}, "path": "Assets/Art/Sprites/btn_ok.png", "guid": "c0000000000000000000000000000002"},
+           {"name": "icon_potion", "rect": {"x": 64, "y": 64, "w": 64, "h": 64}, "path": "Assets/Art/icons.png", "guid": "9a8b7c6d5e4f30211203f4e5d6c7b8a9"},
+           {"name": "gone", "rect": {"x": 0, "y": 0, "w": 0, "h": 0}, "path": "Assets/Art/Sprites/gone.png", "guid": "c0000000000000000000000000000003"}]},
+  {"address": "esc_atlas", "guid": "c0000000000000000000000000000004", "path": "Assets/Art/esc.spriteatlas", "kind": "other", "group": "G", "includeInBuild": true, "labels": [],
+   "sub": [{"name": "dotdot", "rect": {"x": 0, "y": 0, "w": 0, "h": 0}, "path": "../../x.png"},
+           {"name": "inner", "rect": {"x": 0, "y": 0, "w": 0, "h": 0}, "path": "Assets/../../x.png"},
+           {"name": "abs", "rect": {"x": 0, "y": 0, "w": 0, "h": 0}, "path": "C:/Windows/win.ini"},
+           {"name": "prefix", "rect": {"x": 0, "y": 0, "w": 0, "h": 0}, "path": "ProjectSettings/x.png"},
+           {"name": "link", "rect": {"x": 0, "y": 0, "w": 0, "h": 0}, "path": "Assets/Link/secret.png"}]},
+  {"address": "xss_<img src=x onerror=\"window.__xss=(window.__xss||0)+1\">", "guid": "d0000000000000000000000000000001", "path": "Assets/Art/icons.png", "kind": "image", "group": "G", "includeInBuild": true, "labels": []},
+  {"address": "bare_atlas", "guid": "c0000000000000000000000000000005", "path": "Assets/Art/bare.spriteatlas", "kind": "other", "group": "G", "includeInBuild": true, "labels": []}
  ]}

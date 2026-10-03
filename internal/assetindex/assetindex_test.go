@@ -48,6 +48,37 @@ func TestParseContractExample(t *testing.T) {
 	}
 }
 
+// 계약 1판 덧붙임 : 아틀라스 sub 의 path·guid 는 선택 칸이다. 아틀라스는 경로 확장자로 가린다.
+// 잘못된 sub.path 는 항목 path 와 같이 읽을 때 받아 두고 serve 가 403 으로 막는다.
+func TestAtlasSub(t *testing.T) {
+	ix, err := assetindex.Load(assettest.Path(t, "address-index.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	atlas := ix.Find("ui_atlas[btn_ok]").Entries[0]
+	if !atlas.IsAtlas() || ix.Find("icons").Entries[0].IsAtlas() || !ix.Find("esc_atlas").Entries[0].IsAtlas() {
+		t.Fatal("아틀라스를 확장자로 못 가렸다")
+	}
+	if s := atlas.FindSub("btn_ok"); s == nil || s.Path != "Assets/Art/Sprites/btn_ok.png" || s.GUID != "c0000000000000000000000000000002" || s.Rect.W != 0 {
+		t.Fatalf("sub 의 path·guid 를 잘못 읽었다: %+v", s)
+	}
+	if atlas.FindSub("없음") != nil {
+		t.Fatal("없는 sub 를 찾았다")
+	}
+	if s := ix.Find("icons").Entries[0].FindSub("icon_sword"); s == nil || s.Path != "" || s.GUID != "" {
+		t.Fatalf("path·guid 없는 sub 는 빈 값이어야 한다: %+v", s)
+	}
+	if s := ix.Find("esc_atlas").Entries[0].FindSub("dotdot"); s == nil || assetindex.PathOK(s.Path) {
+		t.Fatalf("잘못된 sub.path 는 받아 두되 PathOK 가 거짓이어야 한다: %+v", s)
+	}
+	for p, want := range map[string]bool{"Assets/a.png": true, "Packages/p/a.png": true, "../x.png": false,
+		"Assets/../x.png": false, "C:/x.png": false, "ProjectSettings/x.png": false, `Assets\a.png`: false, "": false} {
+		if assetindex.PathOK(p) != want {
+			t.Errorf("PathOK(%q) 가 %v 가 아니다", p, want)
+		}
+	}
+}
+
 func TestSplitSub(t *testing.T) {
 	cases := map[string][2]string{"a[b]": {"a", "b"}, "x/y.png[s_1]": {"x/y.png", "s_1"}, "a[b][c]": {"a[b]", "c"}}
 	for in, want := range cases {

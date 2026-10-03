@@ -259,6 +259,173 @@ async function run() {
     return { note: `${text} · 빨간 칸 ${bad} · 그 칸으로 ${jumped}`, ok: bad && jumped && text.includes("검증에 걸려") };
   }, "drop");
 
+  // Z1 — asset 썸네일을 누르면 크게 보기 덮개가 뜨고, 칸 편집기는 안 열리며, Esc 로 닫힌다. 저장은 안 한다.
+  // monster 자료엔 icon 값이 없어 화면에서만 값을 넣는다 (gen.js·기준판은 그대로).
+  await scenario("Z1", "썸네일 누름 → 크게 보기 · 편집 안 열림 · Esc 닫힘", "덮개 · 그림 로드 · 편집기 없음 · Esc 닫힘 · 없음", none, async () => {
+    await page.eval(`state.grid.getRow("mon_1").update({ icon: "icons[icon_sword]" }).then(() => true)`);
+    await page.waitFor(`document.querySelector(".asset-thumb.zoomable")`);
+    const r = await rectOf(`document.querySelector(".asset-thumb.zoomable")`);
+    await page.click(r.x, r.y);
+    await page.waitFor(`document.querySelector(".zoom .zoom-img") && document.querySelector(".zoom .zoom-img").naturalWidth > 0`);
+    await page.sleep(200);
+    const info = await page.eval(`({ w: document.querySelector(".zoom-frame").style.width, cap: document.querySelector(".zoom-caption").textContent,
+      editor: !!document.querySelector(".tabulator-editing, .tabulator-edit-list") })`);
+    await page.shot(path.join(A.out, "Z1-zoom.png"));
+    await page.key("Escape", "Escape", 27);
+    await page.sleep(200);
+    const closed = await page.eval(`!document.querySelector(".zoom")`);
+    // 「닫기」 단추는 Space 로도 눌린다.
+    await page.click(r.x, r.y);
+    await page.waitFor(`document.querySelector(".zoom")`);
+    await page.sleep(150);
+    await page.key(" ", "Space", 32);
+    await page.sleep(200);
+    const spaceClosed = await page.eval(`!document.querySelector(".zoom")`);
+    // 닫은 뒤에는 표 키가 다시 먹는다 — 칸 편집으로 글자를 넣어 본다 (저장은 안 한다).
+    await editCell("mon_2", "name", "Z1확인");
+    const typed = (await rowData("mon_2")).name;
+    await page.eval("state.dirty = false");
+    return { note: `틀 ${info.w} · ${info.cap} · 편집기 ${info.editor} · 닫힘 ${closed} · Space 닫힘 ${spaceClosed} · 닫은 뒤 입력 ${typed}`,
+      ok: !info.editor && closed && spaceClosed && typed === "Z1확인" && info.cap.startsWith("icons[icon_sword]") };
+  }, "monster");
+
+  // L1 — list<asset> 「+N」 은 안 보인 원소 전부다. 미리보기 없는 원소(없는 주소)도 센다.
+  await scenario("L1", "list<asset> +N = 원소 수 − 보인 미리보기", "▶ 3 · +2 · 없음", none, async () => {
+    const cell = `state.grid.getRow("mon_1").getCell("sfx").getElement()`;
+    await page.eval(`state.grid.getRow("mon_1").update({ sfx: ["nope", "Sfx/hit.wav", "Sfx/hit.wav", "Sfx/hit.wav", "Sfx/hit.wav"] }).then(() => true)`);
+    await page.sleep(300);
+    const got = await page.eval(`({ play: ${cell}.querySelectorAll(".asset-play").length, more: (${cell}.querySelector(".asset-more") || {}).textContent || "" })`);
+    await page.eval("state.dirty = false");
+    return { note: `▶ ${got.play} · ${got.more}`, ok: got.play === 3 && got.more === "+2" };
+  }, "monster");
+
+  // X1 — 드롭다운 XSS : 주소·enum 값·ref id 에 든 태그가 실행되지 않고 글자로 보이는가 (asset·enum·ref 편집기 셋).
+  // asset 은 시험 색인의 xss 항목, enum·ref 는 화면의 값 배열에 넣는다 (파일은 안 바꾼다).
+  await scenario("X1", "드롭다운 항목의 HTML 은 글자로 (asset·enum·ref)", "실행 안 됨 · 글자 그대로 ×3 · 없음", none, async () => {
+    const XSS = `<img src=x onerror="window.__xss=(window.__xss||0)+1">`;
+    const probe = async (id, field, typed) => {
+      await openEditor(id, field);
+      if (typed) {
+        // page.type 은 글자만 넣고 키 이벤트를 안 내서 자동완성 거르기가 안 돈다 — keyup 을 한 번 쏜다.
+        await page.type(typed);
+        await page.eval(`(() => { const a = document.activeElement; a.dispatchEvent(new Event("input", { bubbles: true }));
+          a.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: "s", code: "KeyS", keyCode: 83 })); return 1; })()`);
+      }
+      const hasText = `[...document.querySelectorAll(".tabulator-edit-list-item")].some((e) => e.textContent.includes('onerror="window.__xss'))`;
+      await page.waitFor(hasText, 4000).catch(() => {});
+      await page.sleep(600);
+      const got = await page.eval(`({ xss: window.__xss || 0, text: ${hasText}, n: document.querySelectorAll(".tabulator-edit-list-item").length,
+        first: (document.querySelector(".tabulator-edit-list-item") || {}).textContent || "", input: (document.activeElement || {}).value || "" })`);
+      await page.key("Escape", "Escape", 27);
+      await page.sleep(150);
+      return got;
+    };
+    const asset = await probe("mon_1", "icon", "xss");
+    await page.eval(`state.schema.enums.Element.push(${J(XSS)}); true`);
+    const enm = await probe("mon_1", "element", "");
+    await page.eval(`state.schema.enums.Element.pop(); true`);
+    await openTable("drop");
+    await page.eval(`state.ids.get("monster").push(${J("xss_" + XSS)}); true`);
+    const ref = await probe("drop_1", "monster_id", "xss");
+    await page.eval(`state.ids.get("monster").pop(); state.dirty = false; true`);
+    const total = await page.eval(`window.__xss || 0`);
+    return { note: `asset ${J(asset)} · enum ${J(enm)} · ref ${J(ref)} · 실행 ${total}`,
+      ok: total === 0 && asset.text && enm.text && ref.text };
+  }, "monster");
+
+  // G1 — 아틀라스 격자 : 맨 아틀라스 칸에서 격자가 열리고, 타일을 골라 「이 칸에 넣기」 → 칸 값·dirty.
+  // 크게 보기의 「아틀라스 전부 보기」 는 지금 스프라이트를 고른 채 격자를 열고, list 칸 격자에는 넣기 단추가 없다. 저장은 안 한다.
+  await scenario("G1", "아틀라스 격자 훑어보기 · 고르기 · 넣기", "타일 3 · 넣기 → 주소[이름]·dirty · 전부 보기 · list 넣기 없음 · 없음", none, async () => {
+    const cell = `state.grid.getRow("mon_1").getCell("icon").getElement()`;
+    const grid = `document.querySelector(".zoom .atlas-grid")`;
+    await page.eval(`state.grid.getRow("mon_1").update({ icon: "ui_atlas" }).then(() => true)`);
+    await page.waitFor(`${cell}.querySelector(".asset-thumb.zoomable")`);
+    let r = await rectOf(`${cell}.querySelector(".asset-thumb.zoomable")`);
+    await page.click(r.x, r.y);
+    await page.waitFor(grid, 3000);
+    const head = await page.eval(`document.querySelector(".zoom .atlas-head").textContent`);
+    const tiles = await page.eval(`document.querySelectorAll(".zoom .atlas-tile").length`);
+    await page.waitFor(`[...document.querySelectorAll(".zoom .atlas-tile .asset-thumb")].filter((t) => t.style.backgroundImage).length >= 2`, 3000).catch(() => {});
+    r = await rectOf(`[...document.querySelectorAll(".zoom .atlas-tile")].find((t) => t.textContent.includes("icon_potion"))`);
+    await page.click(r.x, r.y);
+    await page.sleep(200);
+    const picked = await page.eval(`({ sel: (document.querySelector(".zoom .atlas-tile.selected") || {}).textContent || "", info: document.querySelector(".zoom .atlas-info").textContent, value: state.grid.getRow("mon_1").getData().icon })`);
+    await page.shot(path.join(A.out, "G1-grid.png"));
+    r = await rectOf(`document.querySelector(".zoom .atlas-put")`);
+    await page.click(r.x, r.y);
+    await page.sleep(300);
+    const put = await page.eval(`({ open: !!document.querySelector(".zoom"), value: state.grid.getRow("mon_1").getData().icon, dirty: state.dirty })`);
+    // 크게 보기 → 「아틀라스 전부 보기」 → 지금 스프라이트가 골라진 격자.
+    await page.waitFor(`${cell}.querySelector(".asset-thumb.zoomable") && ${cell}.textContent.includes("icon_potion")`);
+    r = await rectOf(`${cell}.querySelector(".asset-thumb.zoomable")`);
+    await page.click(r.x, r.y);
+    await page.waitFor(`document.querySelector(".zoom .zoom-all")`, 3000);
+    r = await rectOf(`document.querySelector(".zoom .zoom-all")`);
+    await page.click(r.x, r.y);
+    await page.waitFor(grid, 3000);
+    const again = await page.eval(`(document.querySelector(".zoom .atlas-tile.selected") || {}).textContent || ""`);
+    await page.key("Escape", "Escape", 27);
+    await page.sleep(200);
+    const closed = await page.eval(`!document.querySelector(".zoom")`);
+    // list 칸 : 보기만 — 넣기 단추가 없다.
+    const lcell = `state.grid.getRow("mon_2").getCell("sfx").getElement()`;
+    await page.eval(`state.grid.getRow("mon_2").update({ sfx: ["ui_atlas[btn_ok]"] }).then(() => true)`);
+    await page.waitFor(`${lcell}.querySelector(".asset-thumb.zoomable")`);
+    r = await rectOf(`${lcell}.querySelector(".asset-thumb.zoomable")`);
+    await page.click(r.x, r.y);
+    await page.waitFor(`document.querySelector(".zoom .zoom-all")`, 3000);
+    r = await rectOf(`document.querySelector(".zoom .zoom-all")`);
+    await page.click(r.x, r.y);
+    await page.waitFor(grid, 3000);
+    const listPut = await page.eval(`!!document.querySelector(".zoom .atlas-put")`);
+    await page.key("Escape", "Escape", 27);
+    await page.sleep(150);
+    await page.eval("state.dirty = false");
+    return { note: `${head} · 타일 ${tiles} · 고름 ${picked.sel} (${picked.info}, 값 ${picked.value}) · 넣은 뒤 ${J(put)} · 전부 보기 고름 ${again} · 닫힘 ${closed} · list 넣기 ${listPut}`,
+      ok: head === "ui_atlas · 3장" && tiles === 3 && picked.sel.includes("icon_potion") && picked.info === "icon_potion · 64×64" &&
+        picked.value === "ui_atlas" && !put.open && put.value === "ui_atlas[icon_potion]" && put.dirty === true &&
+        again.includes("icon_potion") && closed && !listPut };
+  }, "monster");
+
+  // A1 — 아틀라스 : 맨 주소는 첫 스프라이트 + 「N장」, `주소[이름]` 은 sub.path 그림(rect 0 = 전체) + sprite 태그 · 크게 보기.
+  await scenario("A1", "아틀라스 스프라이트 썸네일 · 크게 보기", "N장 · sprite · 24×16 · 없음", none, async () => {
+    const cell = `state.grid.getRow("mon_1").getCell("icon").getElement()`;
+    await page.eval(`state.grid.getRow("mon_1").update({ icon: "ui_atlas" }).then(() => true)`);
+    await page.waitFor(`${cell}.querySelector(".asset-thumb.zoomable")`);
+    const bare = await page.eval(`${cell}.querySelector(".kindtag").textContent`);
+    // 맨 아틀라스는 「N장」 표를 눌러도 격자 창이 열린다 (썸네일은 G1 이 본다).
+    // 기본 열 너비에선 표가 칸 밖으로 잘려 눌리지 않는다 — 열을 넓혀 표가 보이게 한다.
+    await page.eval(`state.grid.getColumn("icon").setWidth(280) || true`);
+    await page.sleep(100);
+    const rb = await rectOf(`${cell}.querySelector(".kindtag")`);
+    await page.click(rb.x, rb.y);
+    await page.waitFor(`document.querySelector(".zoom .atlas-head")`, 3000).catch(() => {});
+    const bareCap = await page.eval(`(document.querySelector(".zoom .atlas-head") || {}).textContent || ""`);
+    await page.key("Escape", "Escape", 27);
+    await page.sleep(150);
+    // 없는 하위 이름에는 sprite 표를 달지 않고 「없음」 으로 보인다.
+    await page.eval(`state.grid.getRow("mon_1").update({ icon: "ui_atlas[nope]" }).then(() => true)`);
+    await page.sleep(200);
+    const nope = await page.eval(`({ tag: (${cell}.querySelector(".kindtag") || {}).textContent || "", missing: !!${cell}.querySelector(".asset-missing") })`);
+    await page.eval(`state.grid.getRow("mon_1").update({ icon: "ui_atlas[btn_ok]" }).then(() => true)`);
+    await page.waitFor(`${cell}.querySelector(".asset-thumb.zoomable") && ${cell}.textContent.includes("btn_ok")`);
+    const tag = await page.eval(`${cell}.querySelector(".kindtag").textContent`);
+    await page.shot(path.join(A.out, "A1-atlas-cell.png"));
+    const r = await rectOf(`${cell}.querySelector(".asset-thumb.zoomable")`);
+    await page.click(r.x, r.y);
+    await page.waitFor(`document.querySelector(".zoom .zoom-img") && document.querySelector(".zoom .zoom-img").naturalWidth > 0`);
+    await page.sleep(200);
+    const cap = await page.eval(`document.querySelector(".zoom-caption").textContent`);
+    await page.shot(path.join(A.out, "A1-atlas-zoom.png"));
+    await page.key("Escape", "Escape", 27);
+    await page.sleep(200);
+    const closed = await page.eval(`!document.querySelector(".zoom")`);
+    await page.eval("state.dirty = false");
+    return { note: `맨 주소 ${bare} · ${bareCap} · 없는 이름 ${J(nope)} · 하위 ${tag} · ${cap} · 닫힘 ${closed}`,
+      ok: bare === "3장" && bareCap === "ui_atlas · 3장" && nope.tag !== "sprite" && nope.missing &&
+        tag === "sprite" && cap === "ui_atlas[btn_ok] · 24×16" && closed };
+  }, "monster");
+
   await scenario("P1", "엑셀식 CRLF + 끝 줄바꿈 (2행)", "item.json 2 2", only("item.json", 2, 2), async () => {
     await clickCell("item_0100", "atk");
     await paste("11\t1.25\r\n22\t2.5\r\n");

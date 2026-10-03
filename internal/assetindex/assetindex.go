@@ -49,10 +49,13 @@ type Rect struct {
 	H float64 `json:"h"`
 }
 
-// Sub 는 스프라이트 시트 안의 하위 에셋 하나다.
+// Sub 는 스프라이트 시트·아틀라스 안의 하위 에셋 하나다. W·H 가 0 이면 그림 전체다.
+// Path 가 있으면 Rect 는 그 파일 기준(아틀라스), 없으면 항목 path 기준(시트)이다. 계약 1판 덧붙임.
 type Sub struct {
 	Name string `json:"name"`
 	Rect Rect   `json:"rect"`
+	Path string `json:"path,omitempty"`
+	GUID string `json:"guid,omitempty"`
 }
 
 // Entry 는 색인 항목 하나다. Sub 가 nil 이면 「하위를 모른다」이다.
@@ -70,12 +73,32 @@ type Entry struct {
 
 // HasSub 는 하위 이름이 이 항목의 sub 에 있는지 본다.
 func (e *Entry) HasSub(name string) bool {
-	for _, s := range e.Sub {
-		if s.Name == name {
-			return true
+	return e.FindSub(name) != nil
+}
+
+// FindSub 는 이름이 맞는 sub 를 준다. 없으면 nil 이다.
+func (e *Entry) FindSub(name string) *Sub {
+	for i := range e.Sub {
+		if e.Sub[i].Name == name {
+			return &e.Sub[i]
 		}
 	}
-	return false
+	return nil
+}
+
+// IsAtlas 는 path 확장자로 스프라이트 아틀라스인지 본다. kind 는 other 그대로다 (새 kind 를 안 만든다).
+func (e *Entry) IsAtlas() bool {
+	ext := strings.ToLower(path.Ext(e.Path))
+	return ext == ".spriteatlas" || ext == ".spriteatlasv2"
+}
+
+// PathOK 는 정리된 `/` 상대경로이고 Assets/ · Packages/ 로 시작하는지 본다. 항목 path·sub.path 모두 이것으로 막는다.
+// 「Assets/../ProjectSettings」 처럼 접두만 맞춘 것도 정리하면 달라지니 막힌다.
+func PathOK(p string) bool {
+	if strings.ContainsAny(p, "\\:") || path.IsAbs(p) || path.Clean(p) != p || !fs.ValidPath(p) {
+		return false
+	}
+	return strings.HasPrefix(p, "Assets/") || strings.HasPrefix(p, "Packages/")
 }
 
 // Index 는 색인 파일 한 장이다.

@@ -60,7 +60,8 @@ func (s *Server) handleAssetIndex(w http.ResponseWriter, r *http.Request) {
 				"group":    e.Group,
 				"sub":      subNames(e),
 				"subKnown": e.Sub != nil,
-				"rects":    e.Sub,
+				"rects":    subRects(e),
+				"atlas":    e.IsAtlas(),
 				"preview":  previewKind(e),
 				"thumb":    thumbs[strings.ToLower(e.GUID)+".png"],
 			})
@@ -82,6 +83,21 @@ func subNames(e *assetindex.Entry) []string {
 		names = append(names, one.Name)
 	}
 	return names
+}
+
+// subRects 는 sub 마다 이름·rect·미리보기 종류·src 를 준다. sub.path 는 안 싣는다 — 파일은 주소로만 받는다.
+// src 는 그 그림 파일의 guid 다. 같은 원본을 쓰는 타일 여럿을 UI 가 한 번만 받는 데 쓴다 (모르면 빈 값).
+func subRects(e *assetindex.Entry) []map[string]any {
+	list := []map[string]any{}
+	for i := range e.Sub {
+		one := &e.Sub[i]
+		src := e.GUID
+		if one.Path != "" {
+			src = one.GUID
+		}
+		list = append(list, map[string]any{"name": one.Name, "rect": one.Rect, "preview": targetPreview(e, one), "src": strings.ToLower(src)})
+	}
+	return list
 }
 
 // previewKind 는 브라우저가 그 파일을 열 수 있는지로 고른다. 경로를 못 푼 항목은 none 이다.
@@ -143,9 +159,14 @@ func (s *Server) handleAsset(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "error": "색인에 없는 주소다"})
 		return
 	}
-	entry := pickEntry(m)
-	if entry.Path == "" {
-		writePreviewless(w, entry.Path, "경로를 못 푼 항목이다")
+	// 항목 path 든 아틀라스 sub.path 든 여기서 rel 하나로 모은다. 아래 막기는 rel 에만 건다.
+	rel, found := pickTarget(m)
+	if !found {
+		writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "error": "색인에 없는 하위 에셋이다"})
+		return
+	}
+	if rel == "" {
+		writePreviewless(w, rel, "경로를 못 푼 항목이다")
 		return
 	}
 
@@ -156,27 +177,63 @@ func (s *Server) handleAsset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 4. Assets/ · Packages/ 아래 정리된 상대경로만.
-	if !assetPathOK(entry.Path) {
-		writeForbidden(w, fmt.Sprintf("Assets/·Packages/ 아래 경로가 아니다: %q", entry.Path))
+	if !assetindex.PathOK(rel) {
+		writeForbidden(w, fmt.Sprintf("Assets/·Packages/ 아래 경로가 아니다: %q", rel))
 		return
 	}
-	s.sendAsset(w, jail, entry.Path)
+	s.sendAsset(w, jail, rel)
 }
 
-// pickEntry 는 같은 주소 여럿 중 열 항목을 고른다 : 미리보기가 되고 경로가 바르고 하위 이름이 맞는 첫 항목.
-// 없으면 경로가 있는 첫 항목을 줘서 뒤의 막기가 403·preview:false 를 정하게 한다.
-func pickEntry(m assetindex.Match) *assetindex.Entry {
+// target 은 항목(과 하위 이름)이 가리키는 파일이다. 아틀라스 sub 에 path 가 있으면 그 파일이다.
+func target(e *assetindex.Entry, sub *assetindex.Sub) string {
+	if sub != nil && sub.Path != "" {
+		return sub.Path
+	}
+	return e.Path
+}
+
+// targetPreview 는 target 파일의 미리보기 종류다. sub.path 파일은 그림일 때만 image 다.
+func targetPreview(e *assetindex.Entry, sub *assetindex.Sub) string {
+	if sub != nil && sub.Path != "" {
+		if ct, ok := previewTypes[strings.ToLower(path.Ext(sub.Path))]; ok && strings.HasPrefix(ct, "image/") {
+			return "image"
+		}
+		return "none"
+	}
+	return previewKind(e)
+}
+
+// pickTarget 은 같은 주소 여럿 중 열 파일을 고른다 : 미리보기가 되고 경로가 바른 첫 것.
+// 없으면 경로가 있는 첫 것을 줘서 뒤의 막기가 403·preview:false 를 정하게 한다. 하위 이름이 어디에도 없으면 found 가 거짓이다.
+func pickTarget(m assetindex.Match) (rel string, found bool) {
+	type cand struct {
+		e   *assetindex.Entry
+		sub *assetindex.Sub
+	}
+	list := []cand{}
 	for _, e := range m.Entries {
-		if previewKind(e) != "none" && assetPathOK(e.Path) && (!m.HasSub || e.Sub == nil || e.HasSub(m.Sub)) {
-			return e
+		var sub *assetindex.Sub
+		if m.HasSub && e.Sub != nil {
+			if sub = e.FindSub(m.Sub); sub == nil {
+				continue
+			}
+		}
+		list = append(list, cand{e, sub})
+	}
+	if len(list) == 0 {
+		return "", false
+	}
+	for _, c := range list {
+		if targetPreview(c.e, c.sub) != "none" && assetindex.PathOK(target(c.e, c.sub)) {
+			return target(c.e, c.sub), true
 		}
 	}
-	for _, e := range m.Entries {
-		if e.Path != "" {
-			return e
+	for _, c := range list {
+		if p := target(c.e, c.sub); p != "" {
+			return p, true
 		}
 	}
-	return m.Entries[0]
+	return target(list[0].e, list[0].sub), true
 }
 
 // sendAsset 은 막기 5~7 이다 : 확장자 표를 먼저 보고, os.Root 로 열고, 파일·크기를 본다.
@@ -219,15 +276,6 @@ func (s *Server) sendAsset(w http.ResponseWriter, jail, rel string) {
 	w.Header().Set("Content-Length", fmt.Sprint(info.Size()))
 	w.WriteHeader(http.StatusOK)
 	io.CopyN(w, file, info.Size()) //nolint:errcheck // 이미 보내기 시작한 뒤라 알릴 곳이 없다
-}
-
-// assetPathOK 는 정리된 `/` 상대경로이고 Assets/ · Packages/ 로 시작하는지 본다.
-// 「Assets/../ProjectSettings」 처럼 접두만 맞춘 것도 정리하면 달라지니 막힌다.
-func assetPathOK(p string) bool {
-	if strings.ContainsAny(p, "\\:") || path.IsAbs(p) || path.Clean(p) != p || !fs.ValidPath(p) {
-		return false
-	}
-	return strings.HasPrefix(p, "Assets/") || strings.HasPrefix(p, "Packages/")
 }
 
 func writeForbidden(w http.ResponseWriter, why string) {

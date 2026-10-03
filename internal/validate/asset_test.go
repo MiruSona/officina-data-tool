@@ -237,6 +237,50 @@ func TestAssetDefaultsSurviveCut(t *testing.T) {
 	}
 }
 
+// 아틀라스(.spriteatlas·v2 경로의 other 항목) : `아틀라스[이름]` 은 image 다. 맨 주소는 other 라 image 열에서 kind 오류다.
+func TestAssetAtlas(t *testing.T) {
+	cases := []struct {
+		name     string
+		row      string
+		problems []want
+		warnings []want
+	}{
+		{"sprite", `{"id":"a","icon":"ui_atlas[btn_ok]"}`, nil, nil},
+		{"sprite-sheet-file", `{"id":"a","icon":"ui_atlas[icon_potion]"}`, nil, nil},
+		{"sub-missing", `{"id":"a","icon":"ui_atlas[btn_okk]"}`, []want{{"card.json", 2, "icon", validate.RuleAsset}}, nil},
+		{"bare", `{"id":"a","icon":"ui_atlas"}`, []want{{"card.json", 2, "icon", validate.RuleAssetKind}}, nil},
+		{"bare-no-kind", `{"id":"a","icon":"icons","any":"ui_atlas"}`, nil, nil},
+		{"no-sub-list", `{"id":"a","icon":"bare_atlas[x]"}`, nil, []want{{"card.json", 2, "icon", validate.RuleAssetSubUnchecked}}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			problems, warnings := runAsset(t, c.row, true)
+			checkProblems(t, problems, c.problems)
+			checkProblems(t, warnings, c.warnings)
+		})
+	}
+
+	problems, _ := runAsset(t, `{"id":"a","icon":"ui_atlas[btn_okk]"}`+",\n"+`{"id":"b","icon":"ui_atlas"}`, true)
+	if len(problems) != 2 || !strings.Contains(problems[0].Message, `"btn_ok"`) {
+		t.Fatalf("하위 이름에도 가까운 이름을 붙여야 한다:\n%s", validate.Text(problems))
+	}
+	if !strings.Contains(problems[1].Message, "ui_atlas[이름]") {
+		t.Errorf("맨 아틀라스 kind 오류에 `주소[이름]` 귀띔이 없다: %s", problems[1].Message)
+	}
+
+	// default 와 list<asset> 원소도 같은 규칙이다.
+	columns := `{"name":"icon","type":"asset","kind":"image","default":"ui_atlas[nope]"}, {"name":"pics","type":"list<asset>","kind":"image","default":["ui_atlas[btn_ok]","ui_atlas"]}`
+	rows := `{"id":"a","pics":["ui_atlas[icon_potion]","ui_atlas","ui_atlas[zz]"]}`
+	problems, warnings := runAssetDefaultsRows(t, columns, rows, validate.Options{}, true)
+	checkProblems(t, problems, []want{
+		{"schema.json", 0, "icon.default", validate.RuleAsset},
+		{"schema.json", 0, "pics.default[1]", validate.RuleAssetKind},
+		{"card.json", 2, "pics[1]", validate.RuleAssetKind},
+		{"card.json", 2, "pics[2]", validate.RuleAsset},
+	})
+	checkProblems(t, warnings, nil)
+}
+
 // 색인 상태(없음·낡음·메모)는 파일 자리만 있는 경고 줄이 된다.
 func TestIndexWarnings(t *testing.T) {
 	got := validate.IndexWarnings(assetindex.Status{File: "x/address-index.json", Missing: true, Stale: true, Notes: []string{"메모"}})

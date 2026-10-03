@@ -83,7 +83,7 @@ func TestOSRootBlocksJunction(t *testing.T) {
 func TestAssetIndexAPIBroken(t *testing.T) {
 	ts, s, l := newAssetServer(t)
 	code, body := call(t, ts, s, http.MethodGet, "/api/assetindex", "")
-	if code != http.StatusOK || body["ok"] != true || len(body["entries"].([]any)) != 16 {
+	if code != http.StatusOK || body["ok"] != true || len(body["entries"].([]any)) != 20 {
 		t.Fatalf("바른 색인이 %d %v 다", code, body["ok"])
 	}
 	for _, broken := range []string{`{"version": 2}`, `{깨짐`, `{"version": 1}`} {
@@ -200,6 +200,95 @@ func TestAssetAPIPathEscape(t *testing.T) {
 	assettest.Write(t, l.Index, strings.Replace(string(raw), `"unityRoot": "../.."`, `"unityRoot": "../../.."`, 1))
 	if res, body := getRaw(t, ts, s, "/api/asset?address=icons"); res.StatusCode != http.StatusForbidden || len(body) > 0 && body[0] == 0x89 {
 		t.Errorf("뿌리 밖 unityRoot 인데 %d 다", res.StatusCode)
+	}
+}
+
+// 아틀라스 `주소[이름]` 은 sub.path 파일을 같은 막기로 준다. 없는 sub 는 404, 감옥 밖 sub.path 는 403.
+func TestAssetAPIAtlas(t *testing.T) {
+	ts, s, l := newAssetServer(t)
+	for address, file := range map[string]string{"ui_atlas%5Bbtn_ok%5D": "Sprites/btn_ok.png", "ui_atlas%5Bicon_potion%5D": "icons.png"} {
+		want, err := os.ReadFile(filepath.Join(l.Root, "Assets", "Art", filepath.FromSlash(file)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, body := getRaw(t, ts, s, "/api/asset?address="+address)
+		if res.StatusCode != http.StatusOK || res.Header.Get("Content-Type") != "image/png" ||
+			res.Header.Get("X-Content-Type-Options") != "nosniff" || string(body) != string(want) {
+			t.Errorf("%s 가 %d %q (%d바이트) 다 — %s 를 줘야 한다", address, res.StatusCode, res.Header.Get("Content-Type"), len(body), file)
+		}
+	}
+	for _, address := range []string{"ui_atlas%5Bnope%5D", "icons%5Bicon_axe%5D"} {
+		if res, body := getRaw(t, ts, s, "/api/asset?address="+address); res.StatusCode != http.StatusNotFound {
+			t.Errorf("없는 sub %s 가 %d 다: %s", address, res.StatusCode, body)
+		}
+	}
+	if res, _ := getRaw(t, ts, s, "/api/asset?address=ui_atlas%5Bgone%5D"); res.StatusCode != http.StatusNotFound {
+		t.Errorf("파일 없는 sub 가 %d 다", res.StatusCode)
+	}
+	// 맨 아틀라스는 .spriteatlasv2 파일이라 미리보기가 없다.
+	if code, body := call(t, ts, s, http.MethodGet, "/api/asset?address=ui_atlas", ""); code != http.StatusOK || body["preview"] != false {
+		t.Errorf("맨 아틀라스가 %d %v 다", code, body)
+	}
+	if res, _ := getRaw(t, ts, nil, "/api/asset?address=ui_atlas%5Bbtn_ok%5D"); res.StatusCode != http.StatusUnauthorized {
+		t.Errorf("토큰 없이 %d 다", res.StatusCode)
+	}
+
+	secret := "비밀-한-바이트도-주면-안-된다"
+	assettest.Write(t, filepath.Join(filepath.Dir(l.Root), "x.png"), secret)
+	assettest.Write(t, filepath.Join(l.Root, "ProjectSettings", "x.png"), secret)
+	outside := t.TempDir()
+	assettest.Write(t, filepath.Join(outside, "secret.png"), secret)
+	cases := []string{"dotdot", "inner", "abs", "prefix"}
+	if runtime.GOOS == "windows" {
+		if out, err := exec.Command("cmd", "/c", "mklink", "/J", filepath.Join(l.Root, "Assets", "Link"), outside).CombinedOutput(); err == nil {
+			cases = append(cases, "link")
+		} else {
+			t.Logf("junction 을 못 만들어 link 는 건너뜀: %v %s", err, out)
+		}
+	}
+	for _, sub := range cases {
+		res, body := getRaw(t, ts, s, "/api/asset?address=esc_atlas%5B"+sub+"%5D")
+		if res.StatusCode != http.StatusForbidden || strings.Contains(string(body), secret) {
+			t.Errorf("esc_atlas[%s] 가 %d 다 (403 이어야 한다): %s", sub, res.StatusCode, body)
+		}
+	}
+}
+
+// /api/assetindex 는 sub 마다 미리보기 종류를 싣는다. 아틀라스 항목은 none 이어도 그 sub 는 image 다.
+func TestAssetIndexAPIAtlas(t *testing.T) {
+	ts, s, _ := newAssetServer(t)
+	_, body := call(t, ts, s, http.MethodGet, "/api/assetindex", "")
+	got := map[string]map[string]any{}
+	for _, one := range body["entries"].([]any) {
+		e := one.(map[string]any)
+		got[e["address"].(string)] = e
+	}
+	atlas := got["ui_atlas"]
+	if atlas["preview"] != "none" || atlas["atlas"] != true || got["icons"]["atlas"] != false {
+		t.Fatalf("아틀라스 항목 칸이 틀렸다: %v", atlas)
+	}
+	previews := map[string]any{}
+	srcs := map[string]any{}
+	for _, one := range atlas["rects"].([]any) {
+		r := one.(map[string]any)
+		previews[r["name"].(string)] = r["preview"]
+		srcs[r["name"].(string)] = r["src"]
+		if _, leaked := r["path"]; leaked {
+			t.Errorf("sub 경로는 UI 에 안 보낸다: %v", r)
+		}
+	}
+	if previews["btn_ok"] != "image" || previews["icon_potion"] != "image" {
+		t.Fatalf("아틀라스 sub 미리보기가 틀렸다: %v", previews)
+	}
+	// src 는 그림 파일의 guid 다 — 같은 원본을 여러 타일이 쓰면 UI 가 한 번만 받는다. 경로는 안 싣는다.
+	if srcs["btn_ok"] != "c0000000000000000000000000000002" || srcs["icon_potion"] != "9a8b7c6d5e4f30211203f4e5d6c7b8a9" {
+		t.Fatalf("sub src 가 틀렸다: %v", srcs)
+	}
+	if r := got["icons"]["rects"].([]any)[1].(map[string]any); r["src"] != "9a8b7c6d5e4f30211203f4e5d6c7b8a9" {
+		t.Fatalf("시트 sub 의 src 는 항목 guid 여야 한다: %v", r)
+	}
+	if r := got["icons"]["rects"].([]any)[0].(map[string]any); r["preview"] != "image" || r["rect"].(map[string]any)["y"] != float64(64) {
+		t.Fatalf("시트 sub 칸이 틀렸다: %v", r)
 	}
 }
 

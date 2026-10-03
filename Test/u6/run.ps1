@@ -106,6 +106,10 @@ try {
 
     # --- 2. 데이터 · git ----------------------------------------------------
     Copy-Item (Join-Path $toolRoot 'Testdata\table\ok\schema.json') $data
+    # 크게 보기(Z1)용 asset 색인과 그림 — 데이터 폴더(git) 밖, 그 부모를 Unity 뿌리로 깐다. numstat 에 안 잡힌다.
+    Copy-Item -Recurse (Join-Path $toolRoot 'Testdata\asset\unity\*') $work
+    New-Item -ItemType Directory -Force -Path (Join-Path $work 'Library\AssetTool') | Out-Null
+    Copy-Item (Join-Path $toolRoot 'Testdata\asset\address-index.json') (Join-Path $work 'Library\AssetTool')
     $r = Invoke-Native 'node' @((Join-Path $here 'gen.js'), $data, "$Rows")
     if ($r.Code -ne 0) { Write-Host $r.Out; Stop-Env 'gen.js 가 실패했다' }
     Write-Host $r.Out.Trim()
