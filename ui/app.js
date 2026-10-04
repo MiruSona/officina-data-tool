@@ -65,7 +65,14 @@ function toast(message, bad) {
 function setDirty(on) {
   state.dirty = on;
   $("dirty").hidden = !on;
+  if (typeof syncLocks === "function") syncLocks(); // schema.js — 행 편집 중엔 스키마 편집을 막는다
 }
+
+// rowsBlocked 는 행 편집을 막을 까닭이다. 저장 안 한 스키마 변경이 있으면 schema.js 가 글을 준다.
+const rowsBlocked = () => (typeof schemaBlockReason === "function" ? schemaBlockReason() : "");
+
+// onDataTab 은 지금 「표」 탭인가다. 표 단축키(Ctrl+S·Ctrl+Z)는 표 탭에서만 듣는다.
+const onDataTab = () => (document.body.dataset.tab || "data") === "data";
 
 function drawTableList(tables) {
   const list = $("tableList");
@@ -965,6 +972,10 @@ async function commitOpenEditor() {
 
 async function save() {
   if (!state.grid) return;
+  if (rowsBlocked()) {
+    toast(rowsBlocked(), true);
+    return;
+  }
   await commitOpenEditor();
   const columns = state.grid.columns;
   const rows = fromGrid(state.grid.getData(), columns);
@@ -1014,7 +1025,7 @@ async function validateAll() {
 }
 
 function addRow() {
-  if (!state.grid) return;
+  if (!state.grid || rowsBlocked()) return;
   state.grid.addRow({ id: nextID() }, false).then((row) => {
     row.scrollTo();
     state.active = row;
@@ -1041,7 +1052,7 @@ function nextID() {
 const DELETE_CONFIRM = 20;
 
 function deleteRow() {
-  if (!state.grid) return;
+  if (!state.grid || rowsBlocked()) return;
   // 범위는 늘 하나 있다 (안 눌러도 첫 칸에 기본 범위가 선다). 한 행짜리여도 그 범위의 행을 쓴다.
   let rows = rangeRows();
   if (rows.length === 0) {
@@ -1123,9 +1134,15 @@ document.addEventListener("keydown", (e) => {
   // e.key 는 한글 자판·Caps Lock 에서 "ㄴ"·"S" 가 된다. 자리(e.code)로 본다.
   if ((e.ctrlKey || e.metaKey) && e.code === "KeyS") {
     e.preventDefault();
+    // 스키마·Enum 탭의 Ctrl+S 는 미리보기를 연다 — 저장은 늘 미리보기를 거친다 (schema.js).
+    if (!onDataTab()) {
+      if (typeof previewSchema === "function" && !$("sheet").open) previewSchema();
+      return;
+    }
     save();
     return;
   }
+  if (!onDataTab()) return;
   // 「행 지우기」 단추를 누른 뒤엔 초점이 표 밖이라 Tabulator 의 Ctrl+Z 가 안 듣는다. 표 밖에서도 되돌린다.
   // 표 안은 Tabulator 가, 글 입력 칸은 브라우저가 맡으므로 건드리지 않는다.
   const outside = !(e.target.closest && e.target.closest(".tabulator, input, select, textarea"));

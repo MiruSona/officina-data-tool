@@ -13,19 +13,6 @@ import (
 	"github.com/mirusona/officina-data-tool/internal/validate"
 )
 
-// handleSchema 는 스키마 전체를 준다. UI 는 이것으로 열과 편집기를 만든다.
-func (s *Server) handleSchema(w http.ResponseWriter, r *http.Request) {
-	if !allowMethod(w, r, http.MethodGet) {
-		return
-	}
-	sch, err := s.loadSchema()
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, schemaJSON(sch))
-}
-
 // handleTables 는 표 이름과 행 수만 준다. 왼쪽 목록이 쓰는 것이다.
 func (s *Server) handleTables(w http.ResponseWriter, r *http.Request) {
 	if !allowMethod(w, r, http.MethodGet) {
@@ -198,14 +185,11 @@ func (s *Server) handleValidate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	// CLI validate 와 같게 V10 오류는 오류다. 깨진 색인은 CLI 의 종료 4 처럼 400 이다.
-	assets, warnings, err := s.assetsFor(sch)
+	problems, warnings, err := s.validateStrict(sch, tables)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	problems, rowWarnings := validate.RunWithIndex(sch, tables, assets)
-	warnings = append(warnings, rowWarnings...)
 	rows := 0
 	for _, t := range tables {
 		rows += len(t.Rows)
@@ -218,6 +202,17 @@ func (s *Server) handleValidate(w http.ResponseWriter, r *http.Request) {
 			"tables": len(tables), "rows": rows, "errors": len(problems),
 		},
 	})
+}
+
+// validateStrict 는 CLI validate 와 같은 판정이다 — V10 오류는 오류다. `validate` · `gen` 이 쓴다.
+// 깨진 색인은 CLI 의 종료 4 처럼 error 로 돌려준다.
+func (s *Server) validateStrict(sch *schema.File, tables map[string]*table.Table) ([]*validate.Problem, []*validate.Problem, error) {
+	assets, warnings, err := s.assetsFor(sch)
+	if err != nil {
+		return nil, nil, err
+	}
+	problems, rowWarnings := validate.RunWithIndex(sch, tables, assets)
+	return problems, append(warnings, rowWarnings...), nil
 }
 
 func (s *Server) loadSchema() (*schema.File, error) {

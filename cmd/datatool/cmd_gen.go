@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 
 	"github.com/mirusona/officina-data-tool/internal/gen"
 	"github.com/mirusona/officina-data-tool/internal/validate"
@@ -39,29 +38,18 @@ func cmdGen(opts options, rest []string) int {
 	// 네임스페이스는 gen.Generate 안에서 이미 박힌다 — 생성 .cs 는 스키마의 namespace 로 태어나고,
 	// 손으로 쓴 Unity 셋은 runtimeFiles 가 ReplaceNamespace 로 갈아 끼우며 「Officina. 잔여 0」을 센다.
 	// 여기서 또 치환하면 `Studio.Officina.Data` 같은 이름이 두 번 갈려 망가진다.
-	files, err := gen.Generate(sch)
-	if err != nil {
-		return fail(opts, exitSchema, err.Error())
-	}
-
 	out = root.outPath(out, root.cfg.Gen, defaultGenDir)
-	stale, err := gen.Write(out, files)
+	written, stale, err := gen.Build(sch, out)
 	if err != nil {
+		if _, isSchema := err.(*gen.SchemaError); isSchema {
+			return fail(opts, exitSchema, err.Error())
+		}
 		return fail(opts, exitWriteFail, err.Error())
 	}
-	return reportGen(opts, out, files, stale, warnings)
+	return reportGen(opts, out, written, stale, warnings)
 }
 
-func reportGen(opts options, dir string, files map[string]string, stale []string, warnings []*validate.Problem) int {
-	written := make([]string, 0, len(files))
-	for name := range files {
-		written = append(written, name)
-	}
-	sort.Strings(written)
-	if stale == nil {
-		stale = []string{}
-	}
-
+func reportGen(opts options, dir string, written []string, stale []string, warnings []*validate.Problem) int {
 	if opts.json {
 		printJSON(map[string]any{
 			"ok":       true,

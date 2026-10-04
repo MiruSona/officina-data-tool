@@ -106,6 +106,9 @@ try {
 
     # --- 2. 데이터 · git ----------------------------------------------------
     Copy-Item (Join-Path $toolRoot 'Testdata\table\ok\schema.json') $data
+    # 「C# 만들기」(K6)가 쓸 자리 — 데이터 폴더(git) 밖 형제 폴더라 numstat 에 안 잡힌다.
+    $genDir = Join-Path $work 'gen'
+    [System.IO.File]::WriteAllText((Join-Path $data '.datatool.json'), "{`"gen`": `"../gen`"}`n")
     # 크게 보기(Z1)용 asset 색인과 그림 — 데이터 폴더(git) 밖, 그 부모를 Unity 뿌리로 깐다. numstat 에 안 잡힌다.
     Copy-Item -Recurse (Join-Path $toolRoot 'Testdata\asset\unity\*') $work
     New-Item -ItemType Directory -Force -Path (Join-Path $work 'Library\AssetTool') | Out-Null
@@ -161,7 +164,7 @@ try {
     $saved = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     & node (Join-Path $here 'u6.js') --url $url --data $data --cdp $cdpPort --out $OutDir `
-        --serve-pid $serveProc.Id --exe $DataTool 2>&1 | Tee-Object -FilePath (Join-Path $OutDir 'u6.log') | Out-Null
+        --serve-pid $serveProc.Id --exe $DataTool --gen $genDir 2>&1 | Tee-Object -FilePath (Join-Path $OutDir 'u6.log') | Out-Null
     $nodeCode = $LASTEXITCODE
     $ErrorActionPreference = $saved
 

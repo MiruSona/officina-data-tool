@@ -5,6 +5,7 @@
 #   .\verify.ps1 -Project <P> -SkipTests -SkipBuild -SkipPlayer   dll · 생성 코드만 넣는다
 #   .\verify.ps1 -Project <P> -Clean                              Verify 몫(이름에 DataToolVerify)만 지운다
 #   .\verify.ps1 -Project <P> -EditorTimeoutMin 60                에디터 한 번 실행의 상한(기본 30분)
+#   .\verify.ps1 -Project <P> -Data <데이터 폴더>                  gen·export 를 Testdata\table\ok 대신 이 폴더로 (그 사본만 — 행·해시가 같아야 U4 가 맞는다)
 #
 # **빈 시험 프로젝트나 사본에서만 돌린다.** Generated · StreamingAssets · Plugins/MessagePack 을 덮어쓴다.
 # 그 자리에 우리 것이 아닌 파일(.cs · 다른 판 dll)이 보이면 아무것도 쓰기 전에 멈춘다(종료 2).
@@ -17,6 +18,7 @@ param(
     [string]$UnityExe,
     [string]$DataTool,
     [string]$LogDir,
+    [string]$Data,
     [ValidateSet('Disabled', 'Minimal', 'Low', 'Medium', 'High')][string]$Stripping,
     [switch]$SkipToolBuild,
     [switch]$SkipPackages,
@@ -47,6 +49,14 @@ $toolRoot = (Resolve-Path (Join-Path $verifyDir '..\..')).Path
 $PlayerTimeoutSec = 60
 $EditorTimeoutSec = $EditorTimeoutMin * 60
 $GeneratedRel = 'Assets\_Project\Scripts\Data\Generated'
+# gen·export 할 데이터. 기본은 시험 골든이다. -Data 는 enum 숫자 고정 같은 꼴만 바꾼 사본을 볼 때 쓴다.
+if ($Data) {
+    if (-not (Test-Path (Join-Path $Data 'schema.json'))) { Write-Host "환경 문제 — -Data 에 schema.json 이 없다 : $Data" -ForegroundColor Red; exit 2 }
+    $okData = (Resolve-Path $Data).Path
+}
+else {
+    $okData = Join-Path $toolRoot 'Testdata\table\ok'
+}
 
 # 단계 기록 — 끝의 판정 표에 찍는다.
 $script:steps = New-Object System.Collections.ArrayList
@@ -195,7 +205,7 @@ $genDir = Join-Path $Project $GeneratedRel
 if (Test-Path $genDir) {
     $previewDir = Join-Path $LogDir 'gen-preview'
     if (Test-Path $previewDir) { Remove-Item -Recurse -Force $previewDir }
-    & $DataTool gen --data (Join-Path $toolRoot 'Testdata\table\ok') --out $previewDir | Out-Null
+    & $DataTool gen --data $okData --out $previewDir | Out-Null
     if ($LASTEXITCODE -ne 0) { Stop-Env "안전장치용 gen 미리보기가 실패했다 — datatool gen 을 직접 돌려 본다" }
     $ours = @{}
     foreach ($f in Get-ChildItem -File -Recurse -Filter '*.cs' $previewDir) { $ours[$f.Name.ToLowerInvariant()] = $true }
@@ -287,7 +297,6 @@ if ($SkipData) {
     Add-Step '3 데이터' '건너뜀' '' ((Get-Date) - $t0)
 }
 else {
-    $okData = Join-Path $toolRoot 'Testdata\table\ok'
     $u4bData = Join-Path $verifyDir 'Fixtures\u4b'
     $testDir = Join-Path $assets 'Tests\DataToolVerify'
     New-Item -ItemType Directory -Force (Join-Path $assets 'StreamingAssets'), $testDir | Out-Null

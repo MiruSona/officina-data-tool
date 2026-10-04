@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mirusona/officina-data-tool/internal/schema"
 )
 
 const okDataDir = "../../Testdata/table/ok"
@@ -34,6 +36,8 @@ func copyDir(t *testing.T, from string) string {
 // 이미 규칙대로인 폴더는 --check 가 통과하고 fmt 가 아무것도 안 바꾼다.
 func TestFmtOnCleanData(t *testing.T) {
 	dir := copyDir(t, okDataDir)
+	// 시험 자료의 schema.json 은 손으로 줄 맞춘 꼴이라, 정규형으로 한 번 바꿔 「이미 깨끗한 폴더」를 만든다.
+	formatSchemaIn(t, dir)
 	if code := run([]string{"fmt", "--check", "--data", dir}); code != exitOK {
 		t.Fatalf("--check 가 종료 0 이 아니다: %d", code)
 	}
@@ -179,5 +183,49 @@ func TestFmtRejectsNumberOutOfRange(t *testing.T) {
 	}
 	if mustRead(t, path) != broken {
 		t.Fatal("실패했는데 파일을 썼다")
+	}
+}
+
+// formatSchemaIn 은 폴더의 schema.json 을 서버 정규형으로 바꿔 둔다.
+func formatSchemaIn(t *testing.T, dir string) {
+	t.Helper()
+	path := filepath.Join(dir, "schema.json")
+	sch, err := schema.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, sch.Format(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// fmt 는 schema.json 도 정규형으로 다시 쓴다 (스키마·enum 편집 설계 결정 5). 뜻(해시)은 그대로다.
+func TestFmtFormatsSchema(t *testing.T) {
+	dir := copyDir(t, okDataDir)
+	path := filepath.Join(dir, "schema.json")
+	before, err := schema.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := captureStdout(t, func() {
+		if code := run([]string{"fmt", "--check", "--data", dir}); code != exitData {
+			t.Fatalf("줄 맞춘 schema.json 인데 --check 가 종료 %d 다", code)
+		}
+	})
+	if !strings.Contains(out, "schema.json") {
+		t.Fatalf("schema.json 을 안 알렸다: %s", out)
+	}
+	if code := run([]string{"fmt", "--data", dir}); code != exitOK {
+		t.Fatalf("fmt 가 종료 %d 다", code)
+	}
+	if got := mustRead(t, path); got != string(before.Format()) {
+		t.Fatalf("정규형이 아니다:\n%s", got)
+	}
+	after, err := schema.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Hash() != before.Hash() {
+		t.Fatal("fmt 가 스키마 뜻을 바꿨다")
 	}
 }

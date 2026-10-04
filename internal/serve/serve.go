@@ -1,7 +1,8 @@
 // Package serve 는 표 편집 UI 를 띄우는 로컬 서버다 (설계 9장).
 //
 // 붙는 곳은 127.0.0.1 뿐이고, 프로세스가 사는 동안만 산다 — 상주하지 않는다.
-// 파일을 쓰는 곳은 PUT 하나뿐이며, 쓰기 규칙은 자기가 안 만들고 table 묶음에 맡긴다.
+// 파일을 쓰는 곳은 셋이다 — 표 PUT, 스키마 PUT(표 여러 장 + schema.json), gen(생성 폴더).
+// 쓰기 규칙은 자기가 안 만들고 table · gen 묶음에 맡긴다.
 // UI 가 JSON 파일을 만들면 fmt 로 정리한 파일과 diff 가 갈린다 (설계 9장).
 package serve
 
@@ -37,6 +38,9 @@ type Server struct {
 	mu sync.Mutex
 	// AssetTool 색인 자리(절대경로). 비면 색인이 없는 것으로 본다.
 	indexPath string
+	// gen 이 C# 을 쓸 폴더(정규화한 절대경로). 비면 POST /api/gen 이 오류다.
+	// .datatool.json 의 gen 칸에서만 온다 — 브라우저에서 경로를 받지 않는다.
+	genDir string
 }
 
 // New 는 데이터 폴더를 잡고 서버를 만든다. 폴더가 없으면 여기서 실패한다.
@@ -92,6 +96,8 @@ func (s *Server) Serve(ln net.Listener) error {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/schema", s.handleSchema)
+	mux.HandleFunc("/api/schema/plan", s.handleSchemaPlan)
+	mux.HandleFunc("/api/gen", s.handleGen)
 	mux.HandleFunc("/api/tables", s.handleTables)
 	mux.HandleFunc("/api/table/", s.handleTable)
 	mux.HandleFunc("/api/validate", s.handleValidate)

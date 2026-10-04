@@ -14,15 +14,26 @@
     <span class="title">DataTool</span>
     <span class="path" id="dataPath"></span>
   </div>
+  <nav class="tabs" aria-label="화면">
+    <button type="button" data-tab="data" aria-selected="true">표</button>
+    <button type="button" data-tab="schema" aria-selected="false">스키마</button>
+    <button type="button" data-tab="enum" aria-selected="false">Enum</button>
+  </nav>
   <div class="actions">
     <span class="dirty" id="dirty" hidden>저장 안 한 변경</span>
-    <button type="button" id="addRow" class="btn">행 추가</button>
-    <button type="button" id="delRow" class="btn">행 지우기</button>
-    <button type="button" id="validate" class="btn">검증</button>
-    <button type="button" id="save" class="btn primary">저장</button>
+    <span class="dirty" id="schemaDirty" hidden>저장 안 한 스키마 변경</span>
+    <span class="data-actions">
+      <button type="button" id="addRow" class="btn">행 추가</button>
+      <button type="button" id="delRow" class="btn">행 지우기</button>
+      <button type="button" id="validate" class="btn">검증</button>
+      <button type="button" id="save" class="btn primary">저장</button>
+    </span>
+    <button type="button" id="gen" class="btn" title="디스크의 스키마·데이터로 C# 을 만든다 (.datatool.json 의 gen 폴더)">C# 만들기</button>
   </div>
 </header>
 
+<div class="view" id="dataView">
+<p class="lockbar" id="rowLock" role="status" hidden></p>
 <p class="hint">
   빈 칸 — <b>필수 열</b>은 빈 채로 두면 저장할 때 검증에 걸리고, <b>기본값이 있는 열</b>은 기본값으로 채워진다 ·
   참거짓은 <code>true</code>·<code>false</code> 만 쓴다 · 목록은 <b>쉼표</b>로 나눈다 (앞뒤 공백은 턴다 · 쉼표를 품은 원소는 <code>["a,b","c"]</code> 처럼 적는다)
@@ -45,10 +56,43 @@
     </ul>
   </section>
 </main>
+</div>
+
+<div class="view" id="schemaView" hidden>
+  <p class="lockbar" id="schemaLock" role="status" hidden></p>
+  <div class="edit-bar">
+    <p class="hint-text" id="schemaHint"></p>
+    <span class="op-count" id="opCount"></span>
+    <button type="button" id="resetSchema" class="btn">되돌리기</button>
+    <button type="button" id="preview" class="btn primary">미리보기 · 저장</button>
+  </div>
+  <fieldset class="edit-layout" id="schemaFields">
+    <nav class="tables" aria-label="고를 것">
+      <h2 class="label" id="pickLabel">표</h2>
+      <ul id="pickList"></ul>
+      <form class="add-form enum-add" id="enumAdd" hidden>
+        <input type="text" id="enumAddName" placeholder="새 enum 이름" aria-label="새 enum 이름" spellcheck="false">
+        <button type="submit" class="btn">enum 추가</button>
+      </form>
+    </nav>
+    <section class="edit-main" id="editMain" aria-label="편집"></section>
+  </fieldset>
+</div>
+
+<datalist id="typeChoices">
+  <option value="string"></option><option value="int"></option><option value="float"></option><option value="bool"></option>
+  <option value="enum"></option><option value="ref"></option><option value="asset"></option>
+  <option value="list&lt;string&gt;"></option><option value="list&lt;int&gt;"></option><option value="list&lt;float&gt;"></option>
+  <option value="list&lt;bool&gt;"></option><option value="list&lt;enum&gt;"></option><option value="list&lt;ref&gt;"></option>
+  <option value="list&lt;asset&gt;"></option>
+</datalist>
+
+<dialog class="sheet" id="sheet" aria-label="스키마 창"></dialog>
 
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
 <script src="vendor/tabulator.min.js"></script>
 <script src="app.js"></script>
+<script src="schema.js"></script>
 </body>
 </html>

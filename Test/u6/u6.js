@@ -1,7 +1,10 @@
 // U6 시나리오 — 크롬 headless 에서 사람처럼 표를 고치고 저장한 뒤 git diff --numstat 으로 판정한다.
 //
 //   node u6.js --url <serve 주소> --data <데이터 폴더(git 저장소)> --cdp <크롬 디버깅 포트>
-//              --out <결과 폴더> --serve-pid <datatool serve PID> [--exe <datatool.exe>]
+//              --out <결과 폴더> --serve-pid <datatool serve PID> [--exe <datatool.exe>] [--gen <C# 폴더>]
+//
+// K1~K6 · X2 는 스키마·Enum 탭이다 (설계 DataTool/Docs/Design/2026-10-04-스키마Enum편집설계.md 5장).
+// --gen 은 데이터 폴더 .datatool.json 의 gen 칸이 가리키는 폴더다 — K6 이 C# 이 거기 생겼는지 본다.
 //
 // 시나리오마다 데이터 폴더를 첫 커밋으로 되돌리고(git reset --hard) 페이지를 새로 연다.
 // 결과는 <out>/u6-results.json, 그림은 <out>/*.png. 종료 0 전부 통과 · 1 하나라도 실패 · 2 크롬에 못 붙음.
@@ -613,6 +616,8 @@ async function run() {
     return { note: `범위 ${J(ranged)} (누른 행 ${mid}) · 확인창 ${dlg.length} · ${text} · 행 ${count} · ${save}`, ok };
   }, "drop");
 
+  await schemaScenarios();
+
   // D1 — 서버를 끄고 저장 (맨 끝). 서버가 죽으니 늘 마지막이다.
   await scenario("D1", "서버를 끄고 저장", "빨간 토스트 「서버에 못 닿았다」 · dirty · 없음", none, async () => {
     await editCell("item_0005", "atk", "5");
@@ -624,6 +629,203 @@ async function run() {
     await page.eval(`document.getElementById("toast").hidden = false`);
     await page.shot(path.join(A.out, "D1-unreachable.png"));
     return { note: `${text} · 빨강 ${bad} · dirty ${dirty}`, ok: text.includes("서버에 못 닿았다") && bad && dirty };
+  });
+}
+
+/* 스키마 · Enum 탭 (설계 2026-10-04 5장) ------------------------------- */
+
+// openTab 은 위 탭 단추를 눌러 화면을 바꾼다. 스키마·Enum 탭은 사본이 서야 끝난다.
+async function openTab(tab) {
+  const r = await rectOf(`document.querySelector('.tabs [data-tab=${J(tab)}]')`);
+  await page.click(r.x, r.y);
+  if (tab !== "data") await page.waitFor(`schemaState.draft && !document.getElementById("schemaView").hidden`);
+  await page.sleep(150);
+}
+// pick 은 왼쪽 목록(표·enum)에서 하나를 누른다.
+async function pick(name) {
+  const r = await rectOf(`[...document.querySelectorAll("#pickList button")].find((b) => b.firstChild.textContent === ${J(name)})`);
+  await page.click(r.x, r.y);
+  await page.sleep(150);
+}
+// setInput 은 칸을 눌러 글을 다 고르고 새로 친 뒤 초점을 빼 change 를 낸다 (사람이 고치고 딴 데 누르는 것과 같다).
+async function setInput(js, text) {
+  const r = await rectOf(js);
+  await page.click(r.x, r.y);
+  await page.key("a", "KeyA", 65, MOD.ctrl);
+  await page.type(text);
+  await page.eval(`document.activeElement.blur(), true`);
+  await page.sleep(150);
+}
+const columnInput = (column, nth) => `document.querySelector('#columnTable tr[data-column=${J(column)}]').querySelectorAll("input,select")[${nth}]`;
+const valueRow = (value) => `document.querySelector('#valueTable tr[data-value=${J(value)}]')`;
+async function clickEl(js) {
+  const r = await rectOf(js);
+  await page.click(r.x, r.y);
+  await page.sleep(150);
+}
+// preview 는 「미리보기 · 저장」 을 눌러 창이 뜰 때까지 기다리고 창 내용을 돌려준다.
+async function preview() {
+  await clickEl(`document.getElementById("preview")`);
+  await page.waitFor(`document.getElementById("sheet").open && document.querySelector("#sheet .sheet-summary")`);
+  return sheetInfo();
+}
+async function sheetInfo() {
+  return page.eval(`({ summary: [...document.querySelectorAll("#sheet .sheet-summary")].map((e) => e.textContent).join(" / "),
+    files: [...document.querySelectorAll("#sheet .plan-files tr")].slice(1).map((tr) => [...tr.children].map((td) => td.textContent).join(" ")),
+    problems: [...document.querySelectorAll("#sheet .plan-problems li")].map((li) => li.textContent),
+    notes: [...document.querySelectorAll("#sheet .plan-notes li")].map((li) => li.textContent),
+    save: document.getElementById("sheetSave") ? !document.getElementById("sheetSave").disabled : null })`);
+}
+// saveSheet 는 미리보기 창의 「저장」 을 누르고 알림을 기다린다.
+async function saveSheet() {
+  await hideToast();
+  await clickEl(`document.getElementById("sheetSave")`);
+  return waitToast();
+}
+const lineCount = (file, needle) => readData(file).split("\n").filter((l) => l.includes(needle)).length;
+// exactly 는 numstat 이 [파일, 더한 줄, 지운 줄] 목록과 차례 없이 같은지 본다.
+const exactly = (want) => (ns) => ns.length === want.length &&
+  want.every(([f, a, d]) => ns.some((n) => n.f === f && n.a === a && n.d === d));
+
+async function schemaScenarios() {
+  resetData();
+  const atkLines = lineCount("item.json", `"atk":`);
+  const rareLines = lineCount("item.json", `"grade":"rare"`);
+
+  // K1 — 열 이름 바꾸기 → 미리보기 → 저장 → 표에 반영 (atk → attack, 행 값까지 따라온다)
+  await scenario("K1", "열 이름 바꾸기 → 미리보기 → 저장 → 표에 반영", `item.json ${atkLines} ${atkLines} · schema.json 1 1`,
+    exactly([["item.json", atkLines, atkLines], ["schema.json", 1, 1]]), async () => {
+      const before = (await rowData("item_0500")).atk;
+      await openTab("schema");
+      await page.shot(path.join(A.out, "K1-schema-tab.png"));
+      await setInput(columnInput("atk", 0), "attack");
+      const ops = await page.eval(`JSON.stringify(schemaState.ops)`);
+      const info = await preview();
+      await page.shot(path.join(A.out, "K1-preview.png"));
+      const text = await saveSheet();
+      await openTab("data");
+      await page.waitFor(`state.grid.getColumn("attack")`);
+      const after = (await rowData("item_0500")).attack;
+      const ok = ops === J([{ op: "renameColumn", table: "item", from: "atk", to: "attack" }]) &&
+        info.files.some((f) => f.startsWith(`item.json ${atkLines} 0`)) && info.save === true &&
+        text.includes("스키마를 저장했다") && after === before && !(await page.eval(`!!state.grid.getColumn("atk")`)) &&
+        /"name":\s*"attack",\s*"type":\s*"int"/.test(readData("schema.json"));
+      return { note: `ops ${ops} · ${info.summary} · 파일 ${J(info.files)} · ${text} · item_0500 ${before} → attack ${after}`, ok };
+    });
+
+  // K2 — enum 값 이름 바꾸기 (Grade.rare → uncommon). 숫자는 그대로라 schema.json 은 배열 꼴 한 줄만 바뀐다.
+  await scenario("K2", "enum 값 이름 바꾸기", `item.json ${rareLines} ${rareLines} · schema.json 1 1`,
+    exactly([["item.json", rareLines, rareLines], ["schema.json", 1, 1]]), async () => {
+      await openTab("enum");
+      await pick("Grade");
+      await page.shot(path.join(A.out, "K2-enum-tab.png"));
+      await setInput(`${valueRow("rare")}.querySelector("input")`, "uncommon");
+      const info = await preview();
+      const text = await saveSheet();
+      const file = readData("item.json");
+      const enums = await page.eval(`JSON.stringify(state.schema.enums.Grade)`);
+      const ok = text.includes("스키마를 저장했다") && !file.includes(`"rare"`) && file.includes(`"grade":"uncommon"`) &&
+        enums === J(["common", "uncommon", "epic"]);
+      return { note: `${info.summary} · ${J(info.files)} · ${text} · Grade ${enums}`, ok };
+    });
+
+  // K3 — 쓰는 행이 있는 값을 대체 값 없이 지우면 미리보기가 막는다. 대체 값을 고르면 통과한다 (저장은 안 한다).
+  await scenario("K3", "쓰이는 enum 값 지우기 — 대체 값 없으면 막힘", "막힘 · 저장 단추 꺼짐 · 대체 값이면 통과 · 없음", none, async () => {
+    await openTab("enum");
+    await pick("Grade");
+    const drop = async (replace) => {
+      await clickEl(`[...${valueRow("rare")}.querySelectorAll("button")].find((b) => b.textContent === "지우기")`);
+      await page.waitFor(`document.getElementById("replaceWith")`);
+      if (replace) await page.eval(`(() => { const s = document.getElementById("replaceWith"); s.value = ${J(replace)}; s.dispatchEvent(new Event("change")); return 1; })()`);
+      await clickEl(`document.getElementById("dropValueOk")`);
+    };
+    await drop("");
+    const blocked = await preview();
+    await page.shot(path.join(A.out, "K3-blocked.png"));
+    await clickEl(`document.getElementById("sheetClose")`);
+    await page.eval(`loadSchemaEdit().then(() => true)`);
+    await pick("Grade");
+    await drop("common");
+    const ops = await page.eval(`JSON.stringify(schemaState.ops)`);
+    const passed = await preview();
+    await clickEl(`document.getElementById("sheetClose")`);
+    const ok = !blocked.save && blocked.summary.includes("막혔다") && blocked.problems.some((p) => p.includes("replaceWith")) &&
+      passed.save === true && passed.files.some((f) => f.startsWith("item.json")) &&
+      ops === J([{ op: "dropEnumValue", enum: "Grade", value: "rare", replaceWith: "common" }]);
+    await page.eval(`setSchemaDirty(false), true`);
+    return { note: `막힘 ${J(blocked)} · 대체 ${ops} → ${passed.summary} ${J(passed.files)}`, ok };
+  });
+
+  // K4 — 미리보기 뒤 디스크의 schema.json 이 바뀌면 저장은 409 — 아무것도 안 쓰고 「다시 읽기」 를 권한다.
+  await scenario("K4", "409 — 디스크가 바뀌면 다시 읽기 안내", "schema.json 1 0 (밖에서 고친 줄만) · item.json 그대로", only("schema.json", 1, 0), async () => {
+    await openTab("schema");
+    await setInput(columnInput("price", 0), "cost");
+    const info = await preview();
+    fs.appendFileSync(path.join(A.data, "schema.json"), "\n"); // 다른 사람·편집기가 고친 것
+    await clickEl(`document.getElementById("sheetSave")`);
+    await page.waitFor(`document.getElementById("sheetReload")`);
+    const conflict = await sheetInfo();
+    await page.shot(path.join(A.out, "K4-conflict.png"));
+    const revBefore = await page.eval("schemaState.rev");
+    await clickEl(`document.getElementById("sheetReload")`);
+    await page.waitFor(`!schemaState.dirty && schemaState.rev !== ${J(revBefore)}`);
+    const back = await page.eval(`!!document.querySelector('#columnTable tr[data-column="price"]')`);
+    const ok = info.save === true && conflict.summary.includes("바뀌었다") && back;
+    return { note: `${conflict.summary} · 다시 읽은 뒤 price ${back}`, ok };
+  });
+
+  // K5 — 저장 안 한 행 편집이 있으면 스키마 편집을 막고, 저장 안 한 스키마 변경이 있으면 행 편집을 막는다.
+  await scenario("K5", "행 편집 중엔 스키마 편집 막힘 (반대도)", "스키마 막힘 · 행 막힘 · 없음", none, async () => {
+    await editCell("item_0500", "atk", "777");
+    await openTab("schema");
+    const a = await page.eval(`({ bar: document.getElementById("schemaLock").hidden ? "" : document.getElementById("schemaLock").textContent,
+      fields: document.getElementById("schemaFields").disabled, preview: document.getElementById("preview").disabled })`);
+    await page.shot(path.join(A.out, "K5-schema-locked.png"));
+    await openTab("data");
+    await page.key("z", "KeyZ", 90, MOD.ctrl); // 표 밖 Ctrl+Z 로 되돌리고 dirty 를 끈다
+    await page.eval("setDirty(false), true");
+    await openTab("schema");
+    await setInput(columnInput("name", 4), "아이템 이름"); // 설명 칸(이름·형·default·loc·설명) — op 없는 편집
+    await openTab("data");
+    const b = await page.eval(`({ bar: document.getElementById("rowLock").hidden ? "" : document.getElementById("rowLock").textContent,
+      save: document.getElementById("save").disabled, locked: document.getElementById("table").classList.contains("locked") })`);
+    await hideToast();
+    await page.key("s", "KeyS", 83, MOD.ctrl);
+    const text = await waitToast(3000).catch(() => "");
+    await page.shot(path.join(A.out, "K5-rows-locked.png"));
+    await page.eval("setSchemaDirty(false), true");
+    const ok = a.bar.includes("저장 안 한 행 편집") && a.fields && a.preview && b.bar.includes("저장 안 한 스키마 변경") &&
+      b.save && b.locked && text.includes("저장 안 한 스키마 변경");
+    return { note: `스키마 쪽 ${J(a)} · 행 쪽 ${J(b)} · Ctrl+S 「${text}」`, ok };
+  });
+
+  // X2 — 서버가 돌려준 글(알림·문제)에 든 태그는 미리보기 창에서 글자로만 보인다.
+  //      monster.icon 기본값에 태그를 넣으면 plan 의 「기본값이 바뀐다」 알림이 그 값을 그대로 싣는다.
+  await scenario("X2", "미리보기 창의 HTML 은 글자로", "실행 안 됨 · 알림에 태그 글자 · 없음", none, async () => {
+    const XSS = `<img src=x onerror="window.__xss=(window.__xss||0)+1">`;
+    await openTab("schema");
+    await pick("monster");
+    await setInput(columnInput("icon", 3), XSS); // default 칸(이름·형·kind·default)
+    const info = await preview();
+    await page.sleep(300);
+    const total = await page.eval(`window.__xss || 0`);
+    const imgs = await page.eval(`document.querySelectorAll("#sheet img").length`);
+    const shown = info.notes.concat(info.problems).some((t) => t.includes("onerror"));
+    await clickEl(`document.getElementById("sheetClose")`);
+    await page.eval("setSchemaDirty(false), true");
+    return { note: `알림 ${J(info.notes)} · 문제 ${J(info.problems.slice(0, 2))} · 실행 ${total} · img ${imgs}`, ok: total === 0 && imgs === 0 && shown };
+  }, "monster");
+
+  // K6 — 「C# 만들기」 : 디스크 스키마로 C# 을 gen 폴더에 쓴다 (데이터 폴더 밖이라 numstat 은 없음).
+  await scenario("K6", "C# 만들기", "written 에 ItemRow.cs · 파일 있음 · 없음", none, async () => {
+    await clickEl(`document.getElementById("gen")`);
+    await page.waitFor(`document.getElementById("sheet").open && document.querySelector("#sheet .sheet-summary")`, 20000);
+    const got = await page.eval(`({ summary: document.querySelector("#sheet .sheet-summary").textContent,
+      written: [...document.querySelectorAll("#sheet .gen-written li")].map((li) => li.textContent) })`);
+    await page.shot(path.join(A.out, "K6-gen.png"));
+    await clickEl(`document.getElementById("sheetClose")`);
+    const onDisk = A.gen ? fs.existsSync(path.join(A.gen, "ItemRow.cs")) && fs.existsSync(path.join(A.gen, "Grade.cs")) : false;
+    return { note: `${got.summary} · ${got.written.length}개 · 디스크 ${onDisk}`, ok: got.summary.includes("썼다") && got.written.includes("ItemRow.cs") && onDisk };
   });
 }
 

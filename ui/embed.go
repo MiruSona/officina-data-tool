@@ -6,7 +6,7 @@ package ui
 
 import "embed"
 
-// FS 는 index.html · app.js · app.css · vendor/ 를 담은 읽기 전용 파일 묶음이다.
+// FS 는 index.html · app.js · schema.js · app.css · vendor/ 를 담은 읽기 전용 파일 묶음이다.
 //
-//go:embed index.html app.js app.css vendor
+//go:embed index.html app.js schema.js app.css vendor
 var FS embed.FS

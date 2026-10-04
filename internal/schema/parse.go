@@ -1,10 +1,12 @@
 package schema
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/mirusona/officina-data-tool/internal/textfile"
@@ -95,15 +97,82 @@ func parseEnums(c *collector, root map[string]json.RawMessage, f *File) {
 	if !ok {
 		return // enum 을 안 쓰는 스키마도 된다
 	}
-	var enums map[string][]string
+	var enums map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &enums); err != nil {
-		c.add("enums", "{이름: [값…]} 꼴이 와야 한다")
+		c.add("enums", "{이름: [값…]} 이나 {이름: {값: 숫자}} 꼴이 와야 한다")
 		return
 	}
 	for _, name := range sortedKeys(enums) {
-		checkEnum(c, name, enums[name])
-		f.Enums[name] = enums[name]
+		values, numbers, ok := parseEnumBody(c, "enums."+name, enums[name])
+		if !ok {
+			continue
+		}
+		checkEnum(c, name, values)
+		f.Enums[name] = values
+		if numbers != nil {
+			if f.EnumNumbers == nil {
+				f.EnumNumbers = map[string][]int{}
+			}
+			f.EnumNumbers[name] = numbers
+		}
 	}
+}
+
+// maxEnumNumber 는 C# enum 바탕형(int)의 상한이다.
+const maxEnumNumber = 1<<31 - 1
+
+// parseEnumBody 는 enum 하나를 읽는다. 꼴이 둘이다 (스키마·enum 편집 설계 1장 결정 3).
+//
+//	["common","rare"]           — 숫자는 차례 번호. numbers 는 nil 이다
+//	{"common":0,"rare":5}       — 값마다 C# 숫자를 박는다. 적힌 차례를 지키려고 Token 으로 훑는다
+func parseEnumBody(c *collector, where string, raw json.RawMessage) ([]string, []int, bool) {
+	var values []string
+	if err := json.Unmarshal(raw, &values); err == nil {
+		return values, nil, true
+	}
+
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	tok, err := dec.Token()
+	if delim, ok := tok.(json.Delim); err != nil || !ok || delim != '{' {
+		c.add(where, "[값…] 이나 {값: 숫자} 꼴이 와야 한다")
+		return nil, nil, false
+	}
+	numbers := []int{}
+	seen := map[int]string{}
+	for dec.More() {
+		keyTok, err := dec.Token()
+		if err != nil {
+			c.add(where, "{값: 숫자} 꼴이 깨졌다")
+			return nil, nil, false
+		}
+		value, _ := keyTok.(string)
+		at := where + "." + value
+		// json.Number 로 바로 받으면 "1" 같은 문자열도 숫자로 통과한다. any 로 받아 타입을 본다.
+		var item any
+		if err := dec.Decode(&item); err != nil {
+			c.add(at, "{값: 숫자} 꼴이 깨졌다")
+			return nil, nil, false
+		}
+		num, isNumber := item.(json.Number)
+		if !isNumber {
+			c.add(at, "숫자가 와야 한다")
+			continue
+		}
+		n, err := strconv.ParseInt(num.String(), 10, 64)
+		if err != nil || n < 0 || n > maxEnumNumber {
+			c.add(at, fmt.Sprintf("C# 숫자는 0~%d 정수여야 한다: %s", maxEnumNumber, num))
+			continue
+		}
+		if before, dup := seen[int(n)]; dup {
+			c.add(at, fmt.Sprintf("숫자 %d 를 %q 가 이미 쓴다", n, before))
+		}
+		seen[int(n)] = value
+		// 같은 값이 두 번 오면 checkEnum 이 「두 번 있다」로 잡는다.
+		values = append(values, value)
+		numbers = append(numbers, int(n))
+	}
+	return values, numbers, true
 }
 
 func checkEnum(c *collector, name string, values []string) {

@@ -230,6 +230,7 @@ func csType(c *schema.Column) (string, error) {
 // enumFile 은 `<Enum>.cs` 한 장이다 — enum 하나와 이름표 클래스 하나.
 func enumFile(f *schema.File, name string, hash string) string {
 	values := f.Enums[name]
+	numbers := f.EnumNumbersOf(name)
 	typeName := pascal(name)
 	namesClass := enumNamesClass(name)
 
@@ -239,7 +240,7 @@ func enumFile(f *schema.File, name string, hash string) string {
 	b.WriteString("    // schema.json 의 enums." + name + " 다.\n")
 	b.WriteString("    public enum " + typeName + "\n    {\n")
 	for i, v := range values {
-		fmt.Fprintf(&b, "        %s = %d,\n", pascal(v), i)
+		fmt.Fprintf(&b, "        %s = %d,\n", pascal(v), numbers[i])
 	}
 	b.WriteString("    }\n\n")
 

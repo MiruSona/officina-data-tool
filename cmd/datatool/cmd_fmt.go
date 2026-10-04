@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/mirusona/officina-data-tool/internal/schema"
@@ -10,7 +11,7 @@ import (
 	"github.com/mirusona/officina-data-tool/internal/validate"
 )
 
-// cmdFmt 는 데이터 JSON 을 설계 3장의 규칙대로 다시 쓴다.
+// cmdFmt 는 데이터 JSON 을 설계 3장의 규칙대로, schema.json 을 서버 정규형으로 다시 쓴다.
 //
 // --check 면 한 글자도 안 쓰고 「바뀔 파일이 있나」만 알린다 (있으면 종료 2).
 // CI 나 커밋 훅이 이 꼴로 부른다.
@@ -49,7 +50,35 @@ func cmdFmt(opts options, rest []string) int {
 	if err != nil {
 		return failLoad(opts, err)
 	}
+	// 스키마는 표 다음, 마지막에 쓴다 — 웹 저장(PUT /api/schema)과 같은 차례다.
+	schemaChanged, err := formatSchema(filepath.Join(dir, table.SchemaFileName), sch, check)
+	if err != nil {
+		return failLoad(opts, err)
+	}
+	if schemaChanged != "" {
+		changed = append(changed, schemaChanged)
+	}
 	return reportFmt(opts, changed, check)
+}
+
+// formatSchema 는 schema.json 을 서버 정규형(schema.Format)으로 다시 적는다.
+// 달라졌으면 그 경로를, 그대로면 "" 를 준다. 견주는 것은 디스크 바이트 그대로다(BOM·CRLF 도 고친다).
+func formatSchema(path string, sch *schema.File, check bool) (string, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	out := sch.Format()
+	if bytes.Equal(out, raw) {
+		return "", nil
+	}
+	if check {
+		return filepath.ToSlash(path), nil
+	}
+	if err := table.WriteFile(path, out); err != nil {
+		return "", &writeError{err: err}
+	}
+	return filepath.ToSlash(path), nil
 }
 
 // formatTables 는 표마다 규칙대로 다시 적어보고 달라진 파일 이름을 모은다.

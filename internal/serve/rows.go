@@ -107,7 +107,9 @@ func schemaJSON(f *schema.File) map[string]any {
 		"version":   f.Version,
 		"namespace": f.Namespace,
 		"enums":     f.Enums,
-		"tables":    tables,
+		// enum 값마다 C# 숫자다. enums 와 같은 차례다. 값을 더할 때 웹이 최댓값+1 을 잡는 데 쓴다.
+		"enumNumbers": enumNumbersJSON(f),
+		"tables":      tables,
 	}
 }
 
@@ -140,7 +142,18 @@ func columnsJSON(t *schema.Table) []map[string]any {
 		if c.Kind != "" {
 			one["kind"] = c.Kind
 		}
+		if c.Loc {
+			one["loc"] = true
+		}
 		cols = append(cols, one)
 	}
 	return cols
+}
+
+func enumNumbersJSON(f *schema.File) map[string][]int {
+	out := map[string][]int{}
+	for name := range f.Enums {
+		out[name] = f.EnumNumbersOf(name)
+	}
+	return out
 }

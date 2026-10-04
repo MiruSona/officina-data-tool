@@ -350,3 +350,22 @@ func TestDeserializeWrapsWholeBody(t *testing.T) {
 		t.Error("ReadTable 의 표 이름 문구가 사라졌다")
 	}
 }
+
+// enum 둘째 꼴 {값: 숫자} 의 숫자가 C# enum 에 그대로 박힌다 (스키마·enum 편집 설계 결정 3).
+func TestEnumFileUsesPinnedNumbers(t *testing.T) {
+	src := `{"version":1,"namespace":"G.Data","enums":{"Grade":{"common":0,"epic":5,"rare":1}},
+	  "tables":[{"name":"item","columns":[{"name":"id","type":"string"}]}]}`
+	f, err := schema.Parse([]byte(src), "schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := Generate(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := files["Grade.cs"]
+	want := "        Common = 0,\n        Epic = 5,\n        Rare = 1,\n"
+	if !strings.Contains(got, want) {
+		t.Fatalf("숫자가 안 박혔다:\n%s", got)
+	}
+}

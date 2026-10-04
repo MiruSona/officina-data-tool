@@ -491,3 +491,163 @@ button { font: inherit; color: inherit; }
   font-size: 11px;
 }
 .tabulator .asset-missing .asset-name { color: var(--danger); text-decoration: underline dotted; }
+
+/* 탭 · 화면 나누기 (스키마·enum 편집 설계 5장) ------------------------ */
+
+.tabs { display: flex; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
+.tabs button {
+  padding: 4px 14px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  cursor: pointer;
+}
+.tabs button[aria-selected="true"] { background: var(--surface); box-shadow: 0 0 0 1px var(--line); font-weight: 600; }
+
+body[data-tab="schema"] .data-actions,
+body[data-tab="enum"] .data-actions { display: none; }
+.data-actions { display: contents; }
+
+.view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.view[hidden] { display: none; }
+
+.lockbar {
+  margin: 0;
+  padding: 6px 16px;
+  background: var(--danger-soft);
+  border-bottom: 1px solid var(--line);
+  color: var(--danger);
+  font-size: 13px;
+}
+.lockbar[hidden] { display: none; }
+
+#table.locked { pointer-events: none; opacity: .55; }
+
+.edit-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+.hint-text { flex: 1; min-width: 200px; margin: 0; font-size: 12px; color: var(--muted); }
+.op-count { font-size: 12px; color: var(--warn); }
+
+.edit-layout {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  gap: 1px;
+  background: var(--line);
+}
+.edit-layout { min-width: 0; }
+.edit-layout .tables { grid-area: auto; }
+.edit-layout[disabled] .edit-main { opacity: .55; }
+.edit-main { background: var(--surface); padding: 12px 16px; overflow: auto; min-width: 0; }
+
+.edit-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
+.edit-title { margin: 0 0 10px; font-size: 15px; font-weight: 650; }
+.edit-head .edit-title { margin: 0; }
+.muted { color: var(--muted); font-size: 12px; }
+
+.edit-table { border-collapse: collapse; font-size: 13px; }
+.edit-table th {
+  padding: 4px 6px;
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+.edit-table td { padding: 3px 4px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.edit-table td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right; padding-right: 12px; }
+.edit-table tr.new td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
+.edit-table input[type="text"], .edit-table select, .add-form input, .add-form select, .sheet select {
+  width: 100%;
+  min-width: 64px;
+  padding: 3px 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+}
+.edit-table .col-name, .edit-table .value-name { min-width: 120px; font-family: var(--mono); }
+.edit-table input[disabled], .edit-table select[disabled] { background: var(--surface-2); color: var(--muted); }
+.row-tools { white-space: nowrap; }
+.btn.mini { padding: 2px 8px; font-size: 12px; }
+
+.add-form { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; max-width: 480px; }
+.add-form input { flex: 1; width: auto; }
+.add-form select { width: auto; }
+.enum-add { flex-direction: column; margin-top: 14px; }
+.enum-add[hidden] { display: none; }
+.enum-add input { flex: none; width: 100%; min-width: 0; }
+.tables .enum-add button {
+  justify-content: center;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+}
+.edit-head input {
+  min-width: 160px;
+  padding: 3px 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-family: var(--mono);
+}
+
+/* 미리보기 · 결과 창 */
+.sheet {
+  width: min(720px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  overflow: auto;
+}
+.sheet::backdrop { background: rgb(0 0 0 / .55); }
+.sheet-title { margin: 0 0 10px; font-size: 16px; }
+.sheet-sub { margin: 14px 0 6px; font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: .04em; }
+.sheet-summary { margin: 0 0 6px; font-weight: 600; }
+.sheet-summary.bad, .sheet .bad { color: var(--danger); }
+.sheet-summary.warn { color: var(--warn); }
+.sheet-field { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.sheet-field select { width: auto; }
+.sheet-list { list-style: none; margin: 0; padding: 0; }
+.sheet-list li { display: flex; flex-wrap: wrap; gap: 4px 10px; padding: 4px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+.sheet-list li:first-child { border-top: 0; }
+.sheet-list .where { font-family: var(--mono); font-size: 12px; color: var(--danger); }
+.plan-warnings .what, .plan-notes .what { color: var(--warn); }
+.plan-files { border-collapse: collapse; font-size: 13px; }
+.plan-files th, .plan-files td { padding: 3px 10px 3px 0; text-align: left; border-bottom: 1px solid var(--line); }
+.plan-files td.num { font-family: var(--mono); text-align: right; }
+.gen-dir { margin: 0 0 6px; white-space: normal; overflow-wrap: anywhere; }
+.sheet-list li.more { color: var(--muted); }
+/* 단추는 창 아래에 붙어 있다 — 목록이 길어도 닫기·저장이 늘 보인다 */
+.sheet-buttons {
+  position: sticky;
+  bottom: -16px;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin: 16px -18px -16px;
+  padding: 10px 18px 16px;
+  background: var(--surface);
+  border-top: 1px solid var(--line);
+}
+
+@media (max-width: 720px) {
+  .edit-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+}

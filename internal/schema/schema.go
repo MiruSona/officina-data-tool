@@ -23,6 +23,9 @@ type File struct {
 	Version   int
 	Namespace string
 	Enums     map[string][]string
+	// enum 값마다 C# 숫자다. Enums 의 값과 같은 차례·같은 길이다.
+	// 비어 있는 enum 은 차례 번호(0,1,2…)로 본다 — EnumNumbersOf 로 읽는다. 해시에는 안 들어간다.
+	EnumNumbers map[string][]int
 	// 적힌 차례 그대로다. 굽는 차례가 곧 이 차례다.
 	Tables []*Table
 }
@@ -85,6 +88,19 @@ func (f *File) TableNames() []string {
 func (f *File) EnumValues(name string) ([]string, bool) {
 	v, ok := f.Enums[name]
 	return v, ok
+}
+
+// EnumNumbersOf 는 enum 값마다 C# 숫자를 준다. 숫자를 안 적은 enum 은 차례 번호다.
+func (f *File) EnumNumbersOf(name string) []int {
+	values := f.Enums[name]
+	if nums, ok := f.EnumNumbers[name]; ok && len(nums) == len(values) {
+		return nums
+	}
+	nums := make([]int, len(values))
+	for i := range values {
+		nums[i] = i
+	}
+	return nums
 }
 
 // Column 은 이름으로 열을 찾는다. 없으면 nil.

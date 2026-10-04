@@ -28,6 +28,12 @@ func cmdServe(opts options, rest []string) int {
 	if err != nil {
 		return failLoad(opts, err)
 	}
+	// 웹 「C# 만들기」 의 자리는 설정의 gen 칸뿐이다. 없으면 그 API 만 오류를 낸다.
+	if root.cfg.Gen != "" {
+		if err := server.SetGenDir(root.outPath("", root.cfg.Gen, defaultGenDir)); err != nil {
+			return fail(opts, exitUsage, err.Error())
+		}
+	}
 	ln, err := server.Listen(port)
 	if err != nil {
 		return fail(opts, exitUsage, fmt.Sprintf("포트를 못 잡았다: %v", err))
