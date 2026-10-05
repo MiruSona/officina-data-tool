@@ -176,6 +176,50 @@ func TestRefSuggestsNearest(t *testing.T) {
 	}
 }
 
+// refSchema 는 ref 열 셋(선택·필수·목록)을 가진 작은 스키마다. TestRefEmpty 가 쓴다.
+const refSchema = `{ "version": 1, "namespace": "Test.Data", "tables": [
+  { "name": "item", "columns": [ { "name": "id", "type": "string" } ] },
+  { "name": "box", "columns": [
+    { "name": "id",    "type": "string" },
+    { "name": "must",  "type": "ref",       "ref": "item" },
+    { "name": "maybe", "type": "ref",       "ref": "item", "default": "" },
+    { "name": "other", "type": "ref",       "ref": "item", "default": "sword" },
+    { "name": "many",  "type": "list<ref>", "ref": "item", "default": [] } ] } ] }`
+
+// ref 칸의 빈 값은 asset 열과 같은 규칙이다 — 선택 열이면 「없음」, 필수 열이면 V2, 목록 안이면 V6.
+func TestRefEmpty(t *testing.T) {
+	cases := []struct {
+		name     string
+		row      string
+		problems []want
+	}{
+		{"ok", `{"id":"a","must":"sword","maybe":"sword","many":["sword"]}`, nil},
+		{"optional-empty", `{"id":"a","must":"sword","maybe":""}`, nil},
+		// default 가 무엇이든 있기만 하면 선택 열이다 — 칸의 "" 는 「없음」으로 통과한다.
+		{"optional-empty-with-id-default", `{"id":"a","must":"sword","other":""}`, nil},
+		{"required-empty", `{"id":"a","must":""}`, []want{{"box.json", 2, "must", validate.RuleRequired}}},
+		{"list-empty", `{"id":"a","must":"sword","many":[""]}`, []want{{"box.json", 2, "many[0]", validate.RuleRef}}},
+		{"typo", `{"id":"a","must":"swrod"}`, []want{{"box.json", 2, "must", validate.RuleRef}}},
+	}
+	sch, err := schema.Parse([]byte(refSchema), "schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	item, err := table.Parse([]byte("[\n{\"id\":\"sword\"}\n]\n"), "item.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			box, err := table.Parse([]byte("[\n"+c.row+"\n]\n"), "box.json")
+			if err != nil {
+				t.Fatal(err)
+			}
+			checkProblems(t, validate.Run(sch, map[string]*table.Table{"item": item, "box": box}), c.problems)
+		})
+	}
+}
+
 // 오류 한 줄의 꼴은 `파일:줄: 표.열 — 무엇이 잘못됐나` 다 (설계 6장).
 func TestProblemLineShape(t *testing.T) {
 	problems := runCase(t, "v5-enum")

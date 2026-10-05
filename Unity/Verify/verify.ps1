@@ -2,12 +2,15 @@
 #
 #   .\verify.ps1 -Project <Unity 프로젝트>                       다 돈다
 #   .\verify.ps1 -Project <P> -SkipBuild -SkipPlayer              EditMode(U1~U4b)만
-#   .\verify.ps1 -Project <P> -SkipTests -SkipBuild -SkipPlayer   dll · 생성 코드만 넣는다
-#   .\verify.ps1 -Project <P> -Clean                              Verify 몫(이름에 DataToolVerify)만 지운다
+#   .\verify.ps1 -Project <P> -SkipTests -SkipBuild -SkipPlayer   dll · 생성 코드 · 구운 파일까지 넣는다 (시험 프로젝트용)
+#   .\verify.ps1 -Project <게임> -PackagesOnly                     MessagePack dll 만 넣는다 — 게임 프로젝트는 이것만 쓴다
+#                                                                 (에디터가 열려 있어도 된다 · -LogDir 말고 다른 인자와 같이 못 준다 ·
+#                                                                  -LogDir 는 프로젝트 밖이어야 한다)
+#   .\verify.ps1 -Project <P> -Clean                             Verify 몫(이름에 DataToolVerify)만 지운다
 #   .\verify.ps1 -Project <P> -EditorTimeoutMin 60                에디터 한 번 실행의 상한(기본 30분)
 #   .\verify.ps1 -Project <P> -Data <데이터 폴더>                  gen·export 를 Testdata\table\ok 대신 이 폴더로 (그 사본만 — 행·해시가 같아야 U4 가 맞는다)
 #
-# **빈 시험 프로젝트나 사본에서만 돌린다.** Generated · StreamingAssets · Plugins/MessagePack 을 덮어쓴다.
+# **빈 시험 프로젝트나 사본에서만 돌린다** (-PackagesOnly 만 예외). Generated · StreamingAssets · Plugins/MessagePack 을 덮어쓴다.
 # 그 자리에 우리 것이 아닌 파일(.cs · 다른 판 dll)이 보이면 아무것도 쓰기 전에 멈춘다(종료 2).
 # 종료 코드 : 0 통과 · 1 판정 실패(코드를 고칠 일) · 2 환경 문제(기계를 고칠 일 · 잡지 않은 예외 · 시간 넘김).
 # 설계 : DataTool/Docs/Design/2026-10-03-Unity검증과웹개선설계.md 3장. 이 파일은 UTF-8 BOM 으로 저장한다.
@@ -28,6 +31,7 @@ param(
     [switch]$SkipBuild,
     [switch]$SkipPlayer,
     [switch]$Clean,
+    [switch]$PackagesOnly,
     [ValidateRange(1, 1440)][int]$EditorTimeoutMin = 30
 )
 
@@ -49,6 +53,17 @@ $toolRoot = (Resolve-Path (Join-Path $verifyDir '..\..')).Path
 $PlayerTimeoutSec = 60
 $EditorTimeoutSec = $EditorTimeoutMin * 60
 $GeneratedRel = 'Assets\_Project\Scripts\Data\Generated'
+
+# -PackagesOnly 는 패키지 단계 하나만 돈다. 다른 단계를 고르는 인자와 같이 주면 뜻이 겹치니 막는다.
+if ($PackagesOnly) {
+    $clash = @('UnityExe', 'DataTool', 'Data', 'Stripping', 'SkipToolBuild', 'SkipPackages', 'SkipData', 'SkipCopy',
+        'SkipTests', 'SkipBuild', 'SkipPlayer', 'Clean', 'EditorTimeoutMin') | Where-Object { $PSBoundParameters.ContainsKey($_) }
+    if (@($clash).Count -gt 0) {
+        Write-Host ("사용법 — -PackagesOnly 는 -Project · -LogDir 하고만 같이 준다 (같이 준 것 : -" + (@($clash) -join ', -') + ')') -ForegroundColor Red
+        exit 2
+    }
+}
+
 # gen·export 할 데이터. 기본은 시험 골든이다. -Data 는 enum 숫자 고정 같은 꼴만 바꾼 사본을 볼 때 쓴다.
 if ($Data) {
     if (-not (Test-Path (Join-Path $Data 'schema.json'))) { Write-Host "환경 문제 — -Data 에 schema.json 이 없다 : $Data" -ForegroundColor Red; exit 2 }
@@ -95,16 +110,146 @@ function Invoke-Gui([string]$exe, [string[]]$argList, [int]$timeoutSec) {
 # 우리가 덮어쓸 자리에 남의 파일이 있으면 멈춘다. 게임 프로젝트를 실수로 지정한 경우를 막는 안전장치다.
 function Stop-Foreign([string]$what, [string[]]$items) {
     $list = ($items | Select-Object -First 10) -join ', '
+    if ($PackagesOnly) {
+        Stop-Env "$what : $list`n프로젝트에는 아무것도 안 썼다. 그 파일을 치우거나 판을 맞춘 뒤 다시 돌린다."
+    }
     Stop-Env "$what : $list`n빈 시험 프로젝트나 사본에서만 돌려라 — 이 스크립트는 Generated · StreamingAssets · Plugins/MessagePack 을 덮어쓴다."
 }
 
+# 내용이 다를 때만 바꿔 넣는다. 같은 폴더의 tmp 에 다 쓴 뒤 옮겨, 열린 에디터가 반쯤 쓰인 파일을 가져가지 않게 한다.
+# tmp 이름은 '.' 로 시작하고 '~' 로 끝난다 — Unity 가 가져오지 않는 꼴이다.
 function Copy-IfChanged([string]$from, [string]$to) {
     $dir = Split-Path -Parent $to
     if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force $dir | Out-Null }
     if (Test-Path $to) {
         if ((Get-FileHash $from).Hash -eq (Get-FileHash $to).Hash) { return }
     }
-    Copy-Item $from $to -Force
+    $tmp = Join-Path $dir ('.' + (Split-Path -Leaf $to) + '.part~')
+    try {
+        Copy-Item -LiteralPath $from -Destination $tmp -Force
+        # Move-Item -Force 는 지우고 옮겨 목적지가 잠깐 빈다. 있는 파일은 Replace 로 한 번에 바꾼다.
+        if (Test-Path -LiteralPath $to) { [IO.File]::Replace($tmp, $to, [NullString]::Value) }
+        else { [IO.File]::Move($tmp, $to) }
+    }
+    catch {
+        if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force }
+        throw
+    }
+}
+
+# 텍스트 두 파일이 줄 끝(CRLF/LF)만 빼고 같은가.
+function Test-SameText([string]$a, [string]$b) {
+    $ta = [IO.File]::ReadAllText($a) -replace "`r`n", "`n"
+    $tb = [IO.File]::ReadAllText($b) -replace "`r`n", "`n"
+    return $ta -ceq $tb
+}
+
+# 로그 폴더 자리. 안 줬으면 TEMP 아래에 시각 이름으로. 아직 만들지 않고 절대경로만 준다.
+function Get-LogDirPath {
+    $path = $script:LogDir
+    if ($path -eq '') { $path = Join-Path $env:TEMP ('datatool-verify-' + (Get-Date).ToString('yyyyMMdd-HHmmss')) }
+    return [IO.Path]::GetFullPath($ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($path))
+}
+
+function Initialize-LogDir {
+    $script:LogDir = Get-LogDirPath
+    New-Item -ItemType Directory -Force $script:LogDir | Out-Null
+    $script:LogDir = (Resolve-Path $script:LogDir).Path
+}
+
+# datatool 을 부른다. stdout 은 돌려주고 stderr(경고)는 화면에만 찍는다. 성패는 $LASTEXITCODE 로만 본다.
+# 부른 쪽이 verify 를 2>&1 로 감싸면 PS 5.1 이 stderr 를 ErrorRecord 로 바꿔 'Stop' 이 trap 으로 끝내므로 여기서만 'Continue' 다.
+function Invoke-DataTool([string[]]$argList) {
+    $ErrorActionPreference = 'Continue'
+    & $DataTool @argList 2>&1 | ForEach-Object {
+        if ($_ -is [System.Management.Automation.ErrorRecord]) { Write-Host "$_" } else { "$_" }
+    }
+}
+
+# 2단계 패키지. MessagePack dll 을 nuget.org 에서 받아 SHA256 을 대조하고 Plugins/MessagePack 에 넣는다.
+# 안전장치 ①(목록 밖 dll) · ②(다른 판 dll)에 걸리면 아무것도 안 쓰고 종료 2.
+function Install-Packages([string]$assets) {
+    $t0 = Get-Date
+    $pluginDir = Join-Path $assets 'Plugins\MessagePack'
+    $list = Import-PowerShellDataFile (Join-Path $verifyDir 'Packages.psd1')
+    $ourDlls = @{}
+    foreach ($pkg in $list.Packages) { $ourDlls[($pkg.Target -replace '/', '\').ToLowerInvariant()] = $pkg }
+
+    # 안전장치 ① — Plugins/MessagePack 에 우리 목록 밖의 dll 이 있으면 멈춘다 (-SkipPackages 여도 본다).
+    $existingDlls = @()
+    if (Test-Path $pluginDir) { $existingDlls = @(Get-ChildItem -File -Recurse -Filter '*.dll' $pluginDir) }
+    $unknown = @($existingDlls | Where-Object { -not $ourDlls.ContainsKey($_.FullName.Substring($pluginDir.Length + 1).ToLowerInvariant()) } |
+        ForEach-Object { $_.FullName.Substring($pluginDir.Length + 1) })
+    if ($unknown.Count -gt 0) { Stop-Foreign "Plugins/MessagePack 에 Packages.psd1 에 없는 dll 이 있다" $unknown }
+
+    if ($SkipPackages) {
+        Add-Step '2 패키지' '건너뜀' '' ((Get-Date) - $t0)
+        return
+    }
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    $cache = Join-Path $env:LOCALAPPDATA 'DataTool\nupkg'
+    New-Item -ItemType Directory -Force $cache | Out-Null
+    $stage = Join-Path $LogDir 'pkg'
+    New-Item -ItemType Directory -Force $stage | Out-Null
+
+    # 먼저 전부 받아 풀어 둔다. 복사는 안전장치 ② 를 지난 뒤에 한다.
+    $staged = @()
+    foreach ($pkg in $list.Packages) {
+        $id = $pkg.Id.ToLowerInvariant()
+        $nupkg = Join-Path $cache "$id.$($pkg.Version).nupkg"
+        if (-not (Test-Path $nupkg)) {
+            $url = "https://api.nuget.org/v3-flatcontainer/$id/$($pkg.Version)/$id.$($pkg.Version).nupkg"
+            Write-Host "  받는 중 : $url"
+            Invoke-WebRequest -Uri $url -OutFile "$nupkg.part" -UseBasicParsing
+            Move-Item -Force "$nupkg.part" $nupkg
+        }
+        if ((Get-FileHash $nupkg -Algorithm SHA256).Hash -ne $pkg.Sha256) {
+            Add-Step '2 패키지' '실패' 2 ((Get-Date) - $t0)
+            Stop-Env "$($pkg.Id) 해시가 다르다 — 받은 파일을 지우고 다시 : $nupkg"
+        }
+
+        # nupkg 안 경로에 // 가 섞인 것이 있어(분석기) 겹친 / 를 하나로 보고 찾는다.
+        $zip = [System.IO.Compression.ZipFile]::OpenRead($nupkg)
+        try {
+            $entry = $zip.Entries | Where-Object { ($_.FullName -replace '/+', '/') -eq $pkg.Entry } | Select-Object -First 1
+            if ($null -eq $entry) { Stop-Env "$($pkg.Id) 안에 $($pkg.Entry) 가 없다" }
+            $tmp = Join-Path $stage ([IO.Path]::GetFileName($pkg.Target))
+            [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $tmp, $true)
+        }
+        finally { $zip.Dispose() }
+        $staged += [pscustomobject]@{ Pkg = $pkg; Tmp = $tmp }
+    }
+
+    # 안전장치 ② — 같은 이름인데 내용이 다른 dll(다른 판)이나 .meta 가 이미 있으면 덮지 않고 멈춘다.
+    # .meta 를 덮으면 GUID 가 바뀌어 그 dll 을 가리키던 참조가 끊긴다. 줄 끝만 다른 것은 같은 것으로 본다.
+    $otherVersion = @()
+    foreach ($s in $staged) {
+        $dest = Join-Path $pluginDir $s.Pkg.Target
+        if ((Test-Path $dest) -and ((Get-FileHash $dest).Hash -ne (Get-FileHash $s.Tmp).Hash)) {
+            $otherVersion += "$($s.Pkg.Target) (기대 판 $($s.Pkg.Version))"
+        }
+        if (-not $s.Pkg.ContainsKey('Meta')) { continue }
+        $metaDest = "$dest.meta"
+        if ((Test-Path $metaDest) -and -not (Test-SameText $metaDest (Join-Path $verifyDir "Meta\$($s.Pkg.Meta)"))) {
+            $otherVersion += "$($s.Pkg.Target).meta (Verify/Meta 의 것과 다르다)"
+        }
+    }
+    if ($otherVersion.Count -gt 0) { Stop-Foreign "Plugins/MessagePack 에 Packages.psd1 과 다른 판 dll · .meta 가 있다" $otherVersion }
+
+    # .meta 를 먼저 넣는다. dll 이 먼저 들어가면 열린 에디터가 제 .meta 를 만들어 가져갈 틈이 생긴다.
+    foreach ($s in $staged) {
+        $pkg = $s.Pkg
+        $metaDest = Join-Path $pluginDir "$($pkg.Target).meta"
+        if ($pkg.ContainsKey('Meta') -and -not (Test-Path $metaDest)) {
+            Copy-IfChanged (Join-Path $verifyDir "Meta\$($pkg.Meta)") $metaDest
+        }
+        Copy-IfChanged $s.Tmp (Join-Path $pluginDir $pkg.Target)
+        Remove-Item $s.Tmp
+        Write-Host "  $($pkg.Id) $($pkg.Version) → Plugins/MessagePack/$($pkg.Target)"
+    }
+    Add-Step '2 패키지' '통과' 0 ((Get-Date) - $t0)
 }
 
 # ---- 0. 사전 검사 ---------------------------------------------------------
@@ -112,6 +257,23 @@ $t0 = Get-Date
 if (-not (Test-Path $Project)) { Stop-Env "프로젝트가 없다 : $Project" }
 $Project = (Resolve-Path $Project).Path
 $assets = Join-Path $Project 'Assets'
+
+# 게임 프로젝트에 dll 만 넣는 길. 에디터가 열려 있어도 되니 잠금 파일 검사보다 앞에 둔다.
+if ($PackagesOnly) {
+    if (-not (Test-Path $assets -PathType Container)) { Stop-Env "Assets 폴더가 없다 — Unity 프로젝트 뿌리를 준다 : $Project" }
+    # 로그 폴더의 pkg 에 dll 사본이 남는다. 프로젝트 아래면 Unity 가 그것까지 가져와 같은 어셈블리가 둘이 된다.
+    $logRoot = (Get-LogDirPath).TrimEnd('\') + '\'
+    $projectRoot = $Project.TrimEnd('\') + '\'
+    if ($logRoot.StartsWith($projectRoot, [StringComparison]::OrdinalIgnoreCase)) {
+        Stop-Env "사용법 — -LogDir 가 프로젝트 아래다. 프로젝트 밖 폴더를 준다 : $logRoot"
+    }
+    Initialize-LogDir
+    Add-Step '0 사전 검사' '통과' 0 ((Get-Date) - $t0)
+    Install-Packages $assets
+    $script:steps | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
+    Write-Host 'MessagePack dll 만 넣었다. 생성 코드 · 구운 파일 · 시험 코드는 건드리지 않았다.' -ForegroundColor Green
+    exit 0
+}
 
 if (Test-Path (Join-Path $Project 'Temp\UnityLockfile')) {
     Stop-Env '프로젝트가 에디터에 열려 있다 — 닫고 다시 (Temp\UnityLockfile)'
@@ -155,9 +317,7 @@ if (-not $SkipTests) {
     }
 }
 
-if ($LogDir -eq '') { $LogDir = Join-Path $env:TEMP ('datatool-verify-' + (Get-Date).ToString('yyyyMMdd-HHmmss')) }
-New-Item -ItemType Directory -Force $LogDir | Out-Null
-$LogDir = (Resolve-Path $LogDir).Path
+Initialize-LogDir
 Write-Host "에디터 : $UnityExe"
 Write-Host "로그   : $LogDir"
 Add-Step '0 사전 검사' '통과' 0 ((Get-Date) - $t0)
@@ -181,7 +341,7 @@ else {
 }
 if (-not (Test-Path $DataTool)) { Stop-Env "datatool 이 없다 : $DataTool" }
 $DataTool = (Resolve-Path $DataTool).Path
-$dtVersion = (& $DataTool version | Out-String).Trim()
+$dtVersion = (Invoke-DataTool @('version') | Out-String).Trim()
 if ($LASTEXITCODE -ne 0) { Stop-Env "datatool version 이 안 돈다 : $DataTool" }
 Write-Host "datatool : $dtVersion ($DataTool)"
 
@@ -205,7 +365,7 @@ $genDir = Join-Path $Project $GeneratedRel
 if (Test-Path $genDir) {
     $previewDir = Join-Path $LogDir 'gen-preview'
     if (Test-Path $previewDir) { Remove-Item -Recurse -Force $previewDir }
-    & $DataTool gen --data $okData --out $previewDir | Out-Null
+    Invoke-DataTool @('gen', '--data', $okData, '--out', $previewDir) | Out-Null
     if ($LASTEXITCODE -ne 0) { Stop-Env "안전장치용 gen 미리보기가 실패했다 — datatool gen 을 직접 돌려 본다" }
     $ours = @{}
     foreach ($f in Get-ChildItem -File -Recurse -Filter '*.cs' $previewDir) { $ours[$f.Name.ToLowerInvariant()] = $true }
@@ -217,79 +377,7 @@ if (Test-Path $genDir) {
 }
 
 # ---- 2. 패키지 ------------------------------------------------------------
-$t0 = Get-Date
-$pluginDir = Join-Path $assets 'Plugins\MessagePack'
-$list = Import-PowerShellDataFile (Join-Path $verifyDir 'Packages.psd1')
-$ourDlls = @{}
-foreach ($pkg in $list.Packages) { $ourDlls[($pkg.Target -replace '/', '\').ToLowerInvariant()] = $pkg }
-
-# 안전장치 ① — Plugins/MessagePack 에 우리 목록 밖의 dll 이 있으면 멈춘다 (-SkipPackages 여도 본다).
-$existingDlls = @()
-if (Test-Path $pluginDir) { $existingDlls = @(Get-ChildItem -File -Recurse -Filter '*.dll' $pluginDir) }
-$unknown = @($existingDlls | Where-Object { -not $ourDlls.ContainsKey($_.FullName.Substring($pluginDir.Length + 1).ToLowerInvariant()) } |
-    ForEach-Object { $_.FullName.Substring($pluginDir.Length + 1) })
-if ($unknown.Count -gt 0) { Stop-Foreign "Plugins/MessagePack 에 Packages.psd1 에 없는 dll 이 있다" $unknown }
-
-if ($SkipPackages) {
-    Add-Step '2 패키지' '건너뜀' '' ((Get-Date) - $t0)
-}
-else {
-    Add-Type -AssemblyName System.IO.Compression.FileSystem
-    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    $cache = Join-Path $env:LOCALAPPDATA 'DataTool\nupkg'
-    New-Item -ItemType Directory -Force $cache | Out-Null
-    $stage = Join-Path $LogDir 'pkg'
-    New-Item -ItemType Directory -Force $stage | Out-Null
-
-    # 먼저 전부 받아 풀어 둔다. 복사는 안전장치 ② 를 지난 뒤에 한다.
-    $staged = @()
-    foreach ($pkg in $list.Packages) {
-        $id = $pkg.Id.ToLowerInvariant()
-        $nupkg = Join-Path $cache "$id.$($pkg.Version).nupkg"
-        if (-not (Test-Path $nupkg)) {
-            $url = "https://api.nuget.org/v3-flatcontainer/$id/$($pkg.Version)/$id.$($pkg.Version).nupkg"
-            Write-Host "  받는 중 : $url"
-            Invoke-WebRequest -Uri $url -OutFile "$nupkg.part" -UseBasicParsing
-            Move-Item -Force "$nupkg.part" $nupkg
-        }
-        if ((Get-FileHash $nupkg -Algorithm SHA256).Hash -ne $pkg.Sha256) {
-            Add-Step '2 패키지' '실패' 2 ((Get-Date) - $t0)
-            Stop-Env "$($pkg.Id) 해시가 다르다 — 받은 파일을 지우고 다시 : $nupkg"
-        }
-
-        # nupkg 안 경로에 // 가 섞인 것이 있어(분석기) 겹친 / 를 하나로 보고 찾는다.
-        $zip = [System.IO.Compression.ZipFile]::OpenRead($nupkg)
-        try {
-            $entry = $zip.Entries | Where-Object { ($_.FullName -replace '/+', '/') -eq $pkg.Entry } | Select-Object -First 1
-            if ($null -eq $entry) { Stop-Env "$($pkg.Id) 안에 $($pkg.Entry) 가 없다" }
-            $tmp = Join-Path $stage ([IO.Path]::GetFileName($pkg.Target))
-            [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $tmp, $true)
-        }
-        finally { $zip.Dispose() }
-        $staged += [pscustomobject]@{ Pkg = $pkg; Tmp = $tmp }
-    }
-
-    # 안전장치 ② — 같은 이름인데 내용이 다른 dll(다른 판)이 이미 있으면 덮지 않고 멈춘다.
-    $otherVersion = @()
-    foreach ($s in $staged) {
-        $dest = Join-Path $pluginDir $s.Pkg.Target
-        if ((Test-Path $dest) -and ((Get-FileHash $dest).Hash -ne (Get-FileHash $s.Tmp).Hash)) {
-            $otherVersion += "$($s.Pkg.Target) (기대 판 $($s.Pkg.Version))"
-        }
-    }
-    if ($otherVersion.Count -gt 0) { Stop-Foreign "Plugins/MessagePack 에 Packages.psd1 과 다른 판 dll 이 있다" $otherVersion }
-
-    foreach ($s in $staged) {
-        $pkg = $s.Pkg
-        Copy-IfChanged $s.Tmp (Join-Path $pluginDir $pkg.Target)
-        if ($pkg.ContainsKey('Meta')) {
-            Copy-IfChanged (Join-Path $verifyDir "Meta\$($pkg.Meta)") (Join-Path $pluginDir "$($pkg.Target).meta")
-        }
-        Remove-Item $s.Tmp
-        Write-Host "  $($pkg.Id) $($pkg.Version) → Plugins/MessagePack/$($pkg.Target)"
-    }
-    Add-Step '2 패키지' '통과' 0 ((Get-Date) - $t0)
-}
+Install-Packages $assets
 
 # ---- 3. 데이터 ------------------------------------------------------------
 $t0 = Get-Date
@@ -307,7 +395,7 @@ else {
         @('export', '--data', $u4bData, '--out', (Join-Path $testDir 'gamedata-u4b.bytes'))
     )
     foreach ($run in $runs) {
-        & $DataTool @run
+        Invoke-DataTool $run
         if ($LASTEXITCODE -ne 0) {
             Add-Step '3 데이터' '실패' $LASTEXITCODE ((Get-Date) - $t0)
             Stop-Env "gen/export 실패 — 위 출력 ($($run[0]) $($run[2]))"

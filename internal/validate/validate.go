@@ -388,10 +388,21 @@ func (c *checker) checkEnum(row *table.Row, col *schema.Column, where string, ra
 
 // checkRef 는 가리키는 id 가 정말 있는지 본다 (V6).
 // 없으면 가장 가까운 id 를 같이 보여준다 — 대부분 오타다 (설계 6장).
+// 빈 값은 asset 열과 같은 규칙이다 — 선택 열이면 「없음」이라 통과, 필수 열이면 V2, 목록 안이면 V6.
 func (c *checker) checkRef(row *table.Row, col *schema.Column, where string, raw json.RawMessage) {
 	v, ok := asString(raw)
 	if !ok {
 		c.addType(row, col, where, raw)
+		return
+	}
+	if v == "" {
+		if col.IsList {
+			c.add(row, where, RuleRef, "list<ref> 안에 빈 id 가 있다 (빼거나 id 를 적는다)")
+			return
+		}
+		if col.Required() {
+			c.add(row, where, RuleRequired, "값이 비었다 (기본값이 없는 필수 열이다)")
+		}
 		return
 	}
 	if _, exists := c.ids[col.Ref][v]; exists {
