@@ -2,8 +2,8 @@ package validate
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
-	"math"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -21,22 +21,18 @@ const MaxPerTable = 100
 //
 //	V2 스키마에 없는 열   checkUnknownColumns
 //	V2 필수 열이 비었다   checkColumn (값이 없을 때)
-//	V3 타입              checkScalar
-//	V4 min·max           checkBounds
-//	V5 enum              checkEnum
+//	V3 타입              checkScalar (판정은 schema.DecodeItem)
+//	V4 min·max           checkBounds (판정은 schema.CheckBounds)
+//	V5 enum              checkScalar (판정은 schema.DecodeItem)
 //	V6 ref               checkRef
 //	V7 id 중복·꼴         checkID
 //	V9 list<T> 원소       checkList
-//	V10 asset            checkAsset · checkAssetDefaults (asset.go)
+//	V10 asset            checkAsset · checkDefaults (asset.go)
 //
 // V1(JSON 이 깨졌나)과 V8(파일 이름 = 표 이름)은 table 묶음이 읽을 때 이미 막는다.
 
 // idForm 은 id 로 쓸 수 있는 꼴이다 (설계 6장 V7).
 var idForm = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
-
-// intForm 은 int 열에 적을 수 있는 글자 꼴이다. 굽는 쪽(bake.toInt)이 받는 꼴과 같다 —
-// `12` 는 되고 `12.0`·`1e3` 은 안 된다.
-var intForm = regexp.MustCompile(`^-?[0-9]+$`)
 
 // Run 은 데이터 전부를 검사해 문제를 모아 준다. 문제가 없으면 빈 조각이다.
 //
@@ -77,7 +73,7 @@ func RunWith(sch *schema.File, tables map[string]*table.Table, opt Options) ([]*
 		sortProblems(c.list, order)
 		sortProblems(c.warns, order)
 		// default 문제(스키마 자리)는 칸 문제 앞에 둔다 — 칸 문제가 넘쳐도 자르기에 안 잘린다.
-		defaults, defaultWarns := c.checkAssetDefaults()
+		defaults, defaultWarns := c.checkDefaults()
 		problems = append(problems, cut(append(defaults, c.list...), t)...)
 		warnings = append(warnings, cut(append(defaultWarns, c.warns...), t)...)
 	}
@@ -263,11 +259,9 @@ func (c *checker) checkValue(row *table.Row, col *schema.Column, where string, r
 
 // checkList 는 list<T> 열을 본다 (V9).
 func (c *checker) checkList(row *table.Row, col *schema.Column, where string, raw json.RawMessage) {
-	// null 은 빈 배열이 아니다. encoding/json 이 null 을 조각에 넣어도 오류를 안 내므로 먼저 막는다.
-	var items []json.RawMessage
-	if isNull(raw) || json.Unmarshal(raw, &items) != nil {
-		c.add(row, where, RuleList,
-			fmt.Sprintf("%s 열인데 배열이 아니다: %s", col.Type, describe(raw)))
+	items, err := schema.Items(col, raw)
+	if err != nil {
+		c.add(row, where, RuleList, err.Error())
 		return
 	}
 	for i, item := range items {
@@ -275,131 +269,63 @@ func (c *checker) checkList(row *table.Row, col *schema.Column, where string, ra
 	}
 }
 
-// checkScalar 는 원소 하나가 열의 타입과 맞는지 본다 (V3).
+// checkScalar 는 원소 하나를 본다. 꼴(V3·V5, list 안 빈 값)은 schema.DecodeItem 이 정하고,
+// 통과하면 열마다 남은 일을 한다 — int·float 는 min·max, ref 는 id 가 있나, asset 은 색인.
 func (c *checker) checkScalar(row *table.Row, col *schema.Column, where string, raw json.RawMessage) {
+	v, err := schema.DecodeItem(c.sch, col, raw)
+	if err != nil {
+		c.addValueError(row, col, where, err)
+		return
+	}
 	switch col.Base {
-	case schema.TypeInt:
-		c.checkInt(row, col, where, raw)
-	case schema.TypeFloat:
-		c.checkFloat(row, col, where, raw)
-	case schema.TypeBool:
-		if !isBool(raw) {
-			c.addType(row, col, where, raw)
-		}
-	case schema.TypeString:
-		if _, ok := asString(raw); !ok {
-			c.addType(row, col, where, raw)
-		}
-	case schema.TypeEnum:
-		c.checkEnum(row, col, where, raw)
+	case schema.TypeInt, schema.TypeFloat:
+		c.checkBounds(row, col, where, raw) // min·max 는 float32 로 낮춘 값이 아니라 raw 로 견준다
 	case schema.TypeRef:
-		c.checkRef(row, col, where, raw)
+		c.checkRef(row, col, where, v.(string))
 	case schema.TypeAsset:
-		c.checkAsset(row, col, where, raw)
+		c.checkAsset(row, col, where, v.(string))
 	}
 }
 
-func (c *checker) addType(row *table.Row, col *schema.Column, where string, raw json.RawMessage) {
-	c.add(row, where, RuleType,
-		fmt.Sprintf("%s%s 와야 하는데 %s 다", col.Base, particle(col.Base), describe(raw)))
-}
-
-// particle 은 타입 이름 뒤에 붙는 조사다. 「string 가 와야 한다」가 눈에 걸려서 둔다.
-func particle(base string) string {
-	switch base {
-	case schema.TypeInt, schema.TypeFloat, schema.TypeRef:
-		return " 가"
-	}
-	return " 이"
-}
-
-// checkInt 는 정수인지 본다. C# 쪽이 int(32비트)라 그 범위도 같이 본다 (설계 4-3 의 타입 표).
-func (c *checker) checkInt(row *table.Row, col *schema.Column, where string, raw json.RawMessage) {
-	v, ok := asNumber(raw)
-	if !ok {
-		c.addType(row, col, where, raw)
+// addValueError 는 변환기의 Kind 를 규칙으로 옮긴다 (값변환기합치기설계 3-2 표).
+// list 안 빈 값은 Base 로 갈라 예전 규칙을 지킨다 — asset 은 serve 저장 때 경고로 가는 길도 그대로다.
+func (c *checker) addValueError(row *table.Row, col *schema.Column, where string, err error) {
+	var ve *schema.ValueError
+	if !errors.As(err, &ve) {
+		c.add(row, where, RuleType, err.Error())
 		return
 	}
-	if v != math.Trunc(v) {
-		c.add(row, where, RuleType, fmt.Sprintf("int 열인데 소수다: %s", string(raw)))
-		return
+	switch ve.Kind {
+	case schema.BadEnum:
+		c.add(row, where, RuleEnum, ve.Message)
+	case schema.BadList:
+		if col.Base == schema.TypeAsset {
+			c.v10(row, where, RuleAsset, ve.Message)
+			return
+		}
+		if col.Base == schema.TypeRef {
+			c.add(row, where, RuleRef, ve.Message)
+			return
+		}
+		c.add(row, where, RuleList, ve.Message)
+	default:
+		c.add(row, where, RuleType, ve.Message)
 	}
-	// 12.0 은 값으로는 정수지만 **굽는 쪽(bake)은 정수 글자만 받는다.**
-	// 여기서 안 막으면 validate 는 OK 인데 export 가 터진다.
-	if !intForm.MatchString(strings.TrimSpace(string(raw))) {
-		c.add(row, where, RuleType,
-			fmt.Sprintf("int 열인데 소수 꼴로 적혔다: %s (소수점 없이 적는다)", string(raw)))
-		return
-	}
-	if v < math.MinInt32 || v > math.MaxInt32 {
-		c.add(row, where, RuleType,
-			fmt.Sprintf("int 가 담을 수 있는 범위를 넘었다: %s (C# int 는 32비트다)", string(raw)))
-		return
-	}
-	c.checkBounds(row, col, where, v)
-}
-
-// checkFloat 는 실수인지 본다. 굽는 값이 float32 라 그 범위도 같이 본다 (설계 7장).
-//
-// float64 로는 멀쩡한 1e39 가 float32 에서는 무한대가 된다. 굽는 자리에서 터지기 전에 여기서 알린다.
-func (c *checker) checkFloat(row *table.Row, col *schema.Column, where string, raw json.RawMessage) {
-	v, ok := asNumber(raw)
-	if !ok {
-		c.addType(row, col, where, raw)
-		return
-	}
-	if math.IsNaN(v) || math.IsInf(v, 0) || v < -math.MaxFloat32 || v > math.MaxFloat32 {
-		c.add(row, where, RuleType,
-			fmt.Sprintf("float 가 담을 수 있는 범위를 넘었다: %s (구울 때 C# float 은 32비트다)", string(raw)))
-		return
-	}
-	c.checkBounds(row, col, where, v)
 }
 
 // checkBounds 는 min·max 안인지 본다 (V4). list 면 원소마다 돈다.
-func (c *checker) checkBounds(row *table.Row, col *schema.Column, where string, v float64) {
-	if col.Min != nil && v < *col.Min {
-		c.add(row, where, RuleRange, fmt.Sprintf("min %g 보다 작다: %g", *col.Min, v))
+func (c *checker) checkBounds(row *table.Row, col *schema.Column, where string, raw json.RawMessage) {
+	if err := schema.CheckBounds(col, raw); err != nil {
+		c.add(row, where, RuleRange, err.Error())
 	}
-	if col.Max != nil && v > *col.Max {
-		c.add(row, where, RuleRange, fmt.Sprintf("max %g 보다 크다: %g", *col.Max, v))
-	}
-}
-
-// checkEnum 은 값이 enum 목록 안인지 본다 (V5).
-func (c *checker) checkEnum(row *table.Row, col *schema.Column, where string, raw json.RawMessage) {
-	v, ok := asString(raw)
-	if !ok {
-		c.addType(row, col, where, raw)
-		return
-	}
-	values, found := c.sch.EnumValues(col.Enum)
-	if !found {
-		return // 없는 enum 은 스키마 검사가 이미 막았다 (종료 3)
-	}
-	for _, one := range values {
-		if one == v {
-			return
-		}
-	}
-	c.add(row, where, RuleEnum, fmt.Sprintf("enum %s 에 없는 값이다: %q (있는 것: %s)",
-		col.Enum, v, strings.Join(values, ", ")))
 }
 
 // checkRef 는 가리키는 id 가 정말 있는지 본다 (V6).
 // 없으면 가장 가까운 id 를 같이 보여준다 — 대부분 오타다 (설계 6장).
-// 빈 값은 asset 열과 같은 규칙이다 — 선택 열이면 「없음」이라 통과, 필수 열이면 V2, 목록 안이면 V6.
-func (c *checker) checkRef(row *table.Row, col *schema.Column, where string, raw json.RawMessage) {
-	v, ok := asString(raw)
-	if !ok {
-		c.addType(row, col, where, raw)
-		return
-	}
+// 꼴은 schema.DecodeItem 이 이미 봤다. 빈 값은 asset 열과 같은 규칙이다 — 선택 열이면 「없음」이라 통과,
+// 필수 열이면 V2 (목록 안의 빈 값은 DecodeItem 이 막아 V6 으로 온다).
+func (c *checker) checkRef(row *table.Row, col *schema.Column, where, v string) {
 	if v == "" {
-		if col.IsList {
-			c.add(row, where, RuleRef, "list<ref> 안에 빈 id 가 있다 (빼거나 id 를 적는다)")
-			return
-		}
 		if col.Required() {
 			c.add(row, where, RuleRequired, "값이 비었다 (기본값이 없는 필수 열이다)")
 		}

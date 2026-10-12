@@ -123,6 +123,15 @@ func TestRules(t *testing.T) {
 		{"v3-float32", []want{
 			{"item.json", 2, "price", validate.RuleType},
 		}},
+		// float32 로 담으면 0 이 되는 수 (값변환기합치기설계 Q10). 1e-40 같은 비정규수는 받는다.
+		{"v3-float32-under", []want{
+			{"item.json", 2, "price", validate.RuleType},
+		}},
+		// ref default 의 id 도 칸 값과 같이 본다 — 자리는 schema.json 줄 0 (설계 Q7). "" 는 「없음」이라 받는다.
+		{"v6-ref-default", []want{
+			{"schema.json", 0, "bonus.default", validate.RuleRef},
+			{"schema.json", 0, "extras.default[0]", validate.RuleRef},
+		}},
 		{"v4-range", []want{
 			{"drop.json", 2, "rate", validate.RuleRange},
 			{"drop.json", 3, "rate", validate.RuleRange},
@@ -252,5 +261,28 @@ func TestTooManyProblemsAreCut(t *testing.T) {
 	last := problems[len(problems)-1]
 	if last.Rule != validate.RuleTooMany || !strings.Contains(last.Message, "50건") {
 		t.Errorf("남은 수를 안 알린다: %s", last.String())
+	}
+}
+
+// float64 로도 못 담는 칸(1e400 · 1e-400)도 V3 다. encoding/json 은 1e-400 을 조용히 0 으로 주고 1e400 은 「수 아님」으로 준다.
+func TestFloat64EdgeCells(t *testing.T) {
+	sch, err := schema.Load(filepath.Join(dataRoot, "schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := "[\n" +
+		`{"id":"a","name":"이름","price":1e-400},` + "\n" +
+		`{"id":"b","name":"이름","price":1e400}` + "\n]\n"
+	item, err := table.Parse([]byte(rows), "item.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	problems := validate.Run(sch, map[string]*table.Table{"item": item})
+	checkProblems(t, problems, []want{
+		{"item.json", 2, "price", validate.RuleType},
+		{"item.json", 3, "price", validate.RuleType},
+	})
+	if !strings.Contains(problems[0].Message, "0 이 된다") || !strings.Contains(problems[1].Message, "담을 수 없다") {
+		t.Errorf("범위 문구가 아니다:\n%s", validate.Text(problems))
 	}
 }

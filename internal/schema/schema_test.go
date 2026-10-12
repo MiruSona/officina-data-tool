@@ -90,6 +90,15 @@ func TestBrokenSchemas(t *testing.T) {
 		"kind-on-int":        "tables[0].columns[1].kind",
 		"unknown-kind":       "tables[0].columns[1].kind",
 		"asset-default-type": "tables[0].columns[1].default",
+		// default 도 칸 값과 같은 변환기로 본다 (값변환기합치기설계 5-2).
+		"default-int-float-form":   "tables[0].columns[1].default",
+		"default-int-exponent":     "tables[0].columns[1].default",
+		"default-int-overflow":     "tables[0].columns[1].default",
+		"default-float-overflow":   "tables[0].columns[1].default",
+		"default-float-underflow":  "tables[0].columns[1].default",
+		"default-list-ref-empty":   "tables[0].columns[1].default[0]",
+		"default-list-asset-empty": "tables[0].columns[1].default[0]",
+		"default-out-of-bounds":    "tables[0].columns[1].default",
 	}
 
 	for name, where := range cases {
@@ -243,5 +252,21 @@ func TestKindNotInHash(t *testing.T) {
 	asString := mustParse(t, strings.Replace(fmt.Sprintf(src, ""), `"asset"`, `"string"`, 1))
 	if asString.Hash() == plain.Hash() {
 		t.Fatal("타입이 string 에서 asset 으로 바뀌었는데 해시가 그대로다")
+	}
+}
+
+// float64 로도 못 담는 default(1e400 · 1e-400)도 스키마 검사가 범위로 막는다 — encoding/json 이 반올림한 값을 믿지 않는다.
+func TestDefaultFloat64EdgeIsSchemaError(t *testing.T) {
+	for _, def := range []string{"1e400", "1e-400", "-1e400"} {
+		src := `{"version":1,"namespace":"My.Data","tables":[{"name":"item","columns":[
+			{"name":"id","type":"string"},{"name":"rate","type":"float","default":` + def + `}]}]}`
+		_, err := schema.Parse([]byte(src), "schema.json")
+		var se *schema.Errors
+		if !errors.As(err, &se) || !hasWhere(se, "tables[0].columns[1].default") {
+			t.Fatalf("default %s 를 못 막았다: %v", def, err)
+		}
+		if !strings.Contains(se.Error(), "float32 로 담") {
+			t.Fatalf("default %s 가 범위 문구가 아니다: %v", def, err)
+		}
 	}
 }

@@ -229,3 +229,36 @@ func TestFmtFormatsSchema(t *testing.T) {
 		t.Fatal("fmt 가 스키마 뜻을 바꿨다")
 	}
 }
+
+// defaultFormTrapDir 은 int 열 default 를 `12.0` 으로 적고 칸에 `12` 를 둔 판이다 (값변환기합치기설계 1장 함정).
+// 정규형으로는 같아서 fmt 가 칸을 지우고, 그 뒤 bake 가 default `12.0` 을 굽다 터지던 자리다.
+func defaultFormTrapDir(t *testing.T) string {
+	t.Helper()
+	dir := copyDir(t, okDataDir)
+	path := filepath.Join(dir, "schema.json")
+	src := mustRead(t, path)
+	trapped := strings.Replace(src, `"max": 9999, "default": 0 }`, `"max": 9999, "default": 12.0 }`, 1)
+	if trapped == src {
+		t.Fatal("시험 자료의 atk default 를 못 바꿨다")
+	}
+	if err := os.WriteFile(path, []byte(trapped), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(mustRead(t, filepath.Join(dir, "item.json")), `"atk":12,`) {
+		t.Fatal("시험 자료에 atk 12 칸이 없다")
+	}
+	return dir
+}
+
+// default `12.0` 은 스키마 검사(종료 3)에서 멈춘다 — fmt 가 칸 `12` 를 지우기 전이다.
+func TestFmtStopsOnDefaultForm(t *testing.T) {
+	dir := defaultFormTrapDir(t)
+	path := filepath.Join(dir, "item.json")
+	before := mustRead(t, path)
+	if code := run([]string{"fmt", "--data", dir, "--json"}); code != exitSchema {
+		t.Fatalf("default 12.0 인데 종료 %d 다", code)
+	}
+	if got := mustRead(t, path); got != before {
+		t.Fatalf("스키마에서 멈췄는데 칸 파일을 고쳤다")
+	}
+}

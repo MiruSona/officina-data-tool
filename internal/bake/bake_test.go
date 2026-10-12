@@ -2,6 +2,8 @@ package bake
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -320,5 +322,50 @@ func TestAssetIsString(t *testing.T) {
 	blue := rowsOf(t, root, "monster")[1].([]any)
 	if blue[monster.ColumnIndex("icon")] != "" {
 		t.Fatalf("빠진 asset 이 기본값 빈 문자열이 아니다: %#v", blue[monster.ColumnIndex("icon")])
+	}
+}
+
+// 값 변환기를 schema.Decode 로 합친 뒤에도 맞는 데이터의 구운 바이트가 한 바이트도 안 바뀐다 (값변환기합치기설계 5-1 #17).
+// 해시는 합치기 전 bake 로 Testdata/table/ok 를 fixedTime 에 구운 값이다. 구운 꼴을 일부러 바꿀 때만 고친다.
+func TestBakeBytesUnchanged(t *testing.T) {
+	_, data := bakeOK(t)
+	const want = "8ef22b0bdc71ca06c48fa4d2eb04e5a9923ddaa223f8235e9aa9ea283d6a890f"
+	if got := fmt.Sprintf("%x", sha256.Sum256(data)); got != want {
+		t.Fatalf("구운 바이트가 바뀌었다: sha256 %s (전: %s)", got, want)
+	}
+}
+
+// enum 목록 밖 값은 validate 를 건너뛰고 Bake 를 바로 불러도 굽지 않는다 (설계 Q5).
+func TestEnumOutOfListIsAnError(t *testing.T) {
+	sch, tables := loadOK(t)
+	tables["item"].Rows[0].Values["grade"] = []byte(`"legend"`)
+
+	data, err := Bake(sch, tables, fixedTime)
+	if err == nil || data != nil {
+		t.Fatalf("enum 목록 밖 값을 구웠다")
+	}
+	typed, ok := err.(*Error)
+	if !ok || typed.Column != "grade" || !strings.Contains(typed.Message, "enum Grade 에 없는 값이다") {
+		t.Fatalf("오류가 틀렸다: %v", err)
+	}
+}
+
+// int32 밖 int 와 float32 아래넘침은 Bake 를 바로 불러도 굽지 않는다 — 전에는 조용히 int64·0 으로 구웠다.
+func TestOutOfTypeRangeIsAnError(t *testing.T) {
+	cases := []struct{ column, raw string }{
+		{"atk", `2147483648`}, {"price", `1e-50`}, {"price", `1e-400`}, {"price", `1e400`},
+	}
+	for _, c := range cases {
+		column, raw := c.column, c.raw
+		t.Run(column+"="+raw, func(t *testing.T) {
+			sch, tables := loadOK(t)
+			tables["item"].Rows[0].Values[column] = []byte(raw)
+
+			_, err := Bake(sch, tables, fixedTime)
+			typed, ok := err.(*Error)
+			if !ok || typed.Column != column {
+				t.Fatalf("%s 에 %s 를 넣었는데 오류 자리가 틀렸다: %v", column, raw, err)
+			}
+		})
 	}
 }

@@ -1,7 +1,6 @@
 package validate
 
 import (
-	"encoding/json"
 	"fmt"
 	"path/filepath"
 
@@ -10,19 +9,10 @@ import (
 	"github.com/mirusona/officina-data-tool/internal/table"
 )
 
-// checkAsset 은 asset 원소 하나를 본다 — 타입·빈 값은 늘, 색인 검사(V10)는 색인이 있을 때만.
-// 표는 연동 설계 3-3 이다.
-func (c *checker) checkAsset(row *table.Row, col *schema.Column, where string, raw json.RawMessage) {
-	v, ok := asString(raw)
-	if !ok {
-		c.addType(row, col, where, raw)
-		return
-	}
+// checkAsset 은 asset 원소 하나를 본다 — 빈 값은 늘, 색인 검사(V10)는 색인이 있을 때만.
+// 꼴(타입·list 안 빈 주소)은 schema.DecodeItem 이 이미 봤다. 표는 연동 설계 3-3 이다.
+func (c *checker) checkAsset(row *table.Row, col *schema.Column, where, v string) {
 	if v == "" {
-		if col.IsList {
-			c.v10(row, where, RuleAsset, "list<asset> 안에 빈 주소가 있다 (빼거나 주소를 적는다)")
-			return
-		}
 		if col.Required() {
 			c.add(row, where, RuleRequired, "값이 비었다 (기본값이 없는 필수 열이다)")
 		}
@@ -48,19 +38,47 @@ func (c *checker) checkAsset(row *table.Row, col *schema.Column, where string, r
 	c.checkAssetBuilt(row, where, m)
 }
 
-// checkAssetDefaults 는 asset 열의 default 를 칸 값과 같은 규칙으로 본다. 표의 행과 상관없이 열마다 한 번.
+// checkDefaults 는 ref·asset 열의 default 가 가리키는 것이 있는지 칸 값과 같은 규칙으로 본다 (V6·V10).
+// 꼴은 스키마 검사가 이미 막았으니 여기서는 존재만 본다. 표의 행과 상관없이 열마다 한 번.
 // 자리는 schema.json · 줄 0 · 열 「이름.default」 다 (README 「asset 열」 V10 표). 오류·경고를 따로 돌려준다.
-func (c *checker) checkAssetDefaults() ([]*Problem, []*Problem) {
+func (c *checker) checkDefaults() ([]*Problem, []*Problem) {
 	spot := &checker{sch: c.sch, st: c.st, ids: c.ids, assets: c.assets, assetWarn: c.assetWarn,
 		t: &table.Table{Name: c.t.Name, Path: filepath.Join(filepath.Dir(c.t.Path), table.SchemaFileName)}}
 	row := &table.Row{}
 	for _, col := range c.st.Columns {
-		if col.Base != schema.TypeAsset || col.Default == nil {
+		if (col.Base != schema.TypeAsset && col.Base != schema.TypeRef) || col.Default == nil {
 			continue
 		}
-		spot.checkValue(row, col, col.Name+".default", col.Default)
+		spot.checkDefault(row, col)
 	}
 	return spot.list, spot.warns
+}
+
+// checkDefault 는 default 하나(list 면 원소마다)가 가리키는 것만 본다. 꼴 판정을 다시 돌리지 않는다.
+// 스키마 검사를 지난 default 라 Decode 가 실패할 일이 없다 — 실패하면 스키마 검사가 이미 알렸으니 건너뛴다.
+func (c *checker) checkDefault(row *table.Row, col *schema.Column) {
+	where := col.Name + ".default"
+	value, err := schema.Decode(c.sch, col, col.Default)
+	if err != nil {
+		return
+	}
+	items, isList := value.([]any)
+	if !isList {
+		c.checkTarget(row, col, where, value.(string))
+		return
+	}
+	for i, item := range items {
+		c.checkTarget(row, col, fmt.Sprintf("%s[%d]", where, i), item.(string))
+	}
+}
+
+// checkTarget 은 ref 면 id 를, asset 이면 색인을 본다.
+func (c *checker) checkTarget(row *table.Row, col *schema.Column, where, v string) {
+	if col.Base == schema.TypeRef {
+		c.checkRef(row, col, where, v)
+		return
+	}
+	c.checkAsset(row, col, where, v)
 }
 
 // checkSub 는 `address[이름]` 의 이름을 본다. 오류를 냈으면 거짓이다.

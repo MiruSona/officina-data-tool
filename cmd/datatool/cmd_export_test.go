@@ -95,3 +95,15 @@ func TestExportStopsOnInvalidData(t *testing.T) {
 		t.Fatalf("검증에 걸렸는데 %s 를 구웠다", out)
 	}
 }
+
+// 같은 함정 판으로 export 하면 bake 까지 안 가고 스키마 검사에서 종료 3 이다. 파일도 안 생긴다.
+func TestExportStopsOnDefaultForm(t *testing.T) {
+	dir := defaultFormTrapDir(t)
+	out := filepath.Join(t.TempDir(), "gamedata.bytes")
+	if code := run([]string{"export", "--data", dir, "--out", out, "--json"}); code != exitSchema {
+		t.Fatalf("default 12.0 인데 종료 %d 다", code)
+	}
+	if _, err := os.Stat(out); err == nil {
+		t.Fatalf("스키마에서 멈췄는데 %s 를 구웠다", out)
+	}
+}

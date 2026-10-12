@@ -1,6 +1,7 @@
 package validate_test
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -170,7 +171,6 @@ func TestAssetDefaults(t *testing.T) {
 		{"sub-missing", `{"name":"icon","type":"asset","default":"icons[icon_axe]"}`, []want{{"schema.json", 0, "icon.default", validate.RuleAsset}}, nil},
 		{"kind", `{"name":"icon","type":"asset","kind":"image","default":"Hero"}`, []want{{"schema.json", 0, "icon.default", validate.RuleAssetKind}}, nil},
 		{"list-item", `{"name":"sfx","type":"list<asset>","default":["Sfx/hit.wav","nope"]}`, []want{{"schema.json", 0, "sfx.default[1]", validate.RuleAsset}}, nil},
-		{"list-empty-item", `{"name":"sfx","type":"list<asset>","default":[""]}`, []want{{"schema.json", 0, "sfx.default[0]", validate.RuleAsset}}, nil},
 		{"list-kind", `{"name":"sfx","type":"list<asset>","kind":"audio","default":["Sfx/hit.wav","icons"]}`, []want{{"schema.json", 0, "sfx.default[1]", validate.RuleAssetKind}}, nil},
 		{"not-built", `{"name":"icon","type":"asset","default":"unbuilt"}`, nil, []want{{"schema.json", 0, "icon.default", validate.RuleAssetNotBuilt}}},
 	}
@@ -194,15 +194,29 @@ func TestAssetDefaults(t *testing.T) {
 	}
 }
 
-// 색인이 없으면 default 의 주소는 안 본다(빈 원소만 본다). 저장 때(serve)는 경고로 간다.
+// 색인이 없으면 default 의 주소는 안 본다. 저장 때(serve)는 경고로 간다.
 func TestAssetDefaultsIndexAndWarn(t *testing.T) {
-	problems, warnings := runAssetDefaults(t, `{"name":"icon","type":"asset","default":"icns"}, {"name":"sfx","type":"list<asset>","default":[""]}`, validate.Options{}, false)
-	checkProblems(t, problems, []want{{"schema.json", 0, "sfx.default[0]", validate.RuleAsset}})
+	problems, warnings := runAssetDefaults(t, `{"name":"icon","type":"asset","default":"icns"}`, validate.Options{}, false)
+	checkProblems(t, problems, nil)
 	checkProblems(t, warnings, nil)
 
 	problems, warnings = runAssetDefaults(t, `{"name":"icon","type":"asset","default":"icns"}`, validate.Options{AssetsAsWarnings: true}, true)
 	checkProblems(t, problems, nil)
 	checkProblems(t, warnings, []want{{"schema.json", 0, "icon.default", validate.RuleAsset}})
+}
+
+// list<asset> default 안의 빈 원소는 꼴 규칙이라 validate 까지 안 오고 스키마 검사가 막는다 (값변환기합치기설계 Q8).
+// 예전 TestAssetDefaults/list-empty-item · TestAssetDefaultsIndexAndWarn 의 빈 원소 판이 재던 것을 여기서 잰다.
+func TestAssetDefaultEmptyItemIsSchemaError(t *testing.T) {
+	src := `{ "version": 1, "namespace": "MyGame.Data", "tables": [ { "name": "card", "columns": [ {"name":"id","type":"string"}, {"name":"sfx","type":"list<asset>","default":["Sfx/hit.wav",""]} ] } ] }`
+	_, err := schema.Parse([]byte(src), table.SchemaFileName)
+	var se *schema.Errors
+	if !errors.As(err, &se) {
+		t.Fatalf("스키마 오류(*schema.Errors)가 아니다: %v", err)
+	}
+	if len(se.List) != 1 || se.List[0].Where != "tables[0].columns[1].default[1]" {
+		t.Fatalf("자리가 default[1] 하나여야 한다:\n%v", err)
+	}
 }
 
 // 행이 0개인 표에서도 default 문제는 한 번 나온다.

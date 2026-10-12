@@ -3,7 +3,6 @@ package schema
 import (
 	"encoding/json"
 	"fmt"
-	"math"
 	"strings"
 
 	"github.com/mirusona/officina-data-tool/internal/assetindex"
@@ -104,79 +103,40 @@ func checkColumnDefault(c *collector, f *File, col *Column) {
 		c.add(where, "기본값이 null 이다 (null 은 값이 아니다 — 칸을 빼거나 값을 적는다)")
 		return
 	}
-	if col.IsList {
-		var items []json.RawMessage
-		if err := json.Unmarshal(col.Default, &items); err != nil {
-			c.add(where, fmt.Sprintf("%s 기본값은 배열이어야 한다", col.Type))
-			return
-		}
-		for i, item := range items {
-			checkValueType(c, fmt.Sprintf("%s[%d]", where, i), f, col, item)
-		}
+	if !col.IsList {
+		checkDefaultItem(c, where, f, col, col.Default)
 		return
 	}
-	checkValueType(c, where, f, col, col.Default)
-}
-
-// checkValueType 은 값 하나가 열의 원소 타입과 맞는지 본다.
-func checkValueType(c *collector, where string, f *File, col *Column, raw json.RawMessage) {
-	if isNullValue(raw) { // 배열 안의 null 도 값이 아니다 (checkColumnDefault 와 같은 판단이다)
-		c.add(where, "null 은 값이 아니다")
+	items, err := Items(col, col.Default)
+	if err != nil {
+		c.add(where, err.Error())
 		return
 	}
-	switch col.Base {
-	case TypeInt:
-		checkInt(c, where, raw)
-	case TypeFloat:
-		var v float64
-		if err := json.Unmarshal(raw, &v); err != nil {
-			c.add(where, "float 가 와야 한다")
-		}
-	case TypeBool:
-		var v bool
-		if err := json.Unmarshal(raw, &v); err != nil {
-			c.add(where, "참거짓이 와야 한다")
-		}
-	case TypeString, TypeRef, TypeAsset:
-		var v string
-		if err := json.Unmarshal(raw, &v); err != nil {
-			c.add(where, "문자열이 와야 한다")
-		}
-	case TypeEnum:
-		checkEnumValue(c, where, f, col, raw)
+	for i, item := range items {
+		checkDefaultItem(c, fmt.Sprintf("%s[%d]", where, i), f, col, item)
 	}
 }
 
-func checkInt(c *collector, where string, raw json.RawMessage) {
-	var v float64
-	if err := json.Unmarshal(raw, &v); err != nil {
-		c.add(where, "int 가 와야 한다")
+// checkDefaultItem 은 default 원소 하나를 칸 값과 같은 변환기로 보고, 통과하면 min·max 도 본다.
+func checkDefaultItem(c *collector, where string, f *File, col *Column, raw json.RawMessage) {
+	if _, err := DecodeItem(f, col, raw); err != nil {
+		c.add(where, err.Error())
 		return
 	}
-	if v != math.Trunc(v) {
-		c.add(where, fmt.Sprintf("int 열인데 소수다: %g", v))
+	if !boundsChecked(col) {
+		return
+	}
+	if err := CheckBounds(col, raw); err != nil {
+		c.add(where, err.Error())
 	}
 }
 
-func checkEnumValue(c *collector, where string, f *File, col *Column, raw json.RawMessage) {
-	var v string
-	if err := json.Unmarshal(raw, &v); err != nil {
-		c.add(where, "enum 값은 문자열이어야 한다")
-		return
+// boundsChecked 는 default 에 min·max 를 견줄 열인지 본다. 아니면 checkColumnBounds 가 이미 알렸다.
+func boundsChecked(col *Column) bool {
+	if col.Base != TypeInt && col.Base != TypeFloat {
+		return false
 	}
-	values, ok := f.Enums[col.Enum]
-	if !ok {
-		return // 없는 enum 은 checkColumnEnum 이 이미 알렸다
-	}
-	if !contains(values, v) {
-		c.add(where, fmt.Sprintf("enum %s 에 없는 값이다: %q (있는 것: %s)",
-			col.Enum, v, strings.Join(values, ", ")))
-	}
-}
-
-// isNullValue 는 값이 JSON null 인지 본다. 굽는 쪽(bake.isNull)과 같은 판단이다.
-func isNullValue(raw json.RawMessage) bool {
-	return strings.TrimSpace(string(raw)) == "null"
+	return col.Min == nil || col.Max == nil || *col.Min <= *col.Max
 }
 
 func listOr(items []string, empty string) string {
