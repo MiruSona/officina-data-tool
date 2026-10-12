@@ -2,6 +2,7 @@ package serve
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -9,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mirusona/officina-data-tool/internal/textfile"
 )
 
 // itemRows 는 시험 자료 item 표 그대로에서 sword_iron 의 atk 만 바꾼 행 배열이다.
@@ -84,6 +87,20 @@ func TestPutTableReturnsNewRev(t *testing.T) {
 	}
 }
 
+// addBOM 은 디스크 파일 앞에 BOM 을 붙이고 붙인 바이트를 돌려준다.
+func addBOM(t *testing.T, path string) []byte {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withBOM := append(append([]byte{}, textfile.BOM...), raw...)
+	if err := os.WriteFile(path, withBOM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return withBOM
+}
+
 // BOM 과 CRLF 만 바뀌어도 rev 가 바뀐다. 다시 받은 rev 로 쓰면 BOM·CR 이 걷힌다.
 func TestPutTableBOMChangesRev(t *testing.T) {
 	ts, s, dir := newTestServer(t)
@@ -92,9 +109,10 @@ func TestPutTableBOMChangesRev(t *testing.T) {
 
 	raw, _ := os.ReadFile(path)
 	crlf := bytes.ReplaceAll(raw, []byte("\n"), []byte("\r\n"))
-	if err := os.WriteFile(path, append([]byte("\xef\xbb\xbf"), crlf...), 0o600); err != nil {
+	if err := os.WriteFile(path, crlf, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	addBOM(t, path)
 	if code, body := putTable(t, ts, s, "item", old, itemRows(12)); code != http.StatusConflict {
 		t.Fatalf("BOM·CRLF 만 바뀌었는데 옛 rev 가 %d 다 (409 여야 한다): %v", code, body)
 	}
@@ -107,7 +125,7 @@ func TestPutTableBOMChangesRev(t *testing.T) {
 		t.Fatalf("새 rev 로 저장이 %d 다: %v", code, body)
 	}
 	after := readString(t, path)
-	if strings.HasPrefix(after, "\xef\xbb\xbf") || strings.Contains(after, "\r") {
+	if strings.HasPrefix(after, string(textfile.BOM)) || strings.Contains(after, "\r") {
 		t.Fatalf("쓴 파일에 BOM 이나 CR 이 남았다: %q", after[:20])
 	}
 }
@@ -313,13 +331,7 @@ func TestPutTableSchemaRevWeakQuoted(t *testing.T) {
 func TestGetSchemaWithBOM(t *testing.T) {
 	ts, s, dir := newTestServer(t)
 	path := filepath.Join(dir, "schema.json")
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, append([]byte("\xEF\xBB\xBF"), raw...), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	addBOM(t, path)
 	code, body := call(t, ts, s, http.MethodGet, "/api/schema", "")
 	if code != http.StatusOK {
 		t.Fatalf("BOM 붙은 schema.json 인데 %d %v 다 (200 이어야 한다)", code, body)
@@ -329,5 +341,89 @@ func TestGetSchemaWithBOM(t *testing.T) {
 	}
 	if _, got := call(t, ts, s, http.MethodGet, "/api/table/item", ""); got["schemaRev"] != body["rev"] {
 		t.Fatalf("표 GET 의 schemaRev %v 가 스키마 rev %v 와 다르다", got["schemaRev"], body["rev"])
+	}
+}
+
+// BOM 만 붙은 schema.json 에 안 바뀌는 스키마 PUT → 안 쓴다. 200 의 rev 는 BOM 포함 디스크 rev 그대로다.
+func TestPutSchemaSameWithBOMWritesNothing(t *testing.T) {
+	ts, s, dir := newTestServer(t)
+	path := filepath.Join(dir, "schema.json")
+	rev, source := schemaSource(t, ts, s)
+	if code, body := putSchema(t, ts, s, rev, editBody(source, "[]")); code != http.StatusOK { // Format 꼴로 맞춰 둔다
+		t.Fatalf("첫 스키마 PUT 이 %d 다: %v", code, body)
+	}
+	before := addBOM(t, path)
+
+	rev, source = schemaSource(t, ts, s)
+	code, body := putSchema(t, ts, s, rev, editBody(source, "[]"))
+	if code != http.StatusOK || body["rev"] != rev {
+		t.Fatalf("BOM 만 다른 스키마 PUT 이 %d, rev %v 다 (보낸 rev %s 그대로여야 한다)", code, body["rev"], rev)
+	}
+	if after, _ := os.ReadFile(path); !bytes.Equal(before, after) {
+		t.Fatal("내용이 같은데 schema.json 을 다시 썼다 (BOM 이 걷혔다)")
+	}
+}
+
+// BOM 만 붙은 표 파일에 같은 행 PUT → 안 쓴다. CRLF 까지 바뀐 경우는 TestPutTableBOMChangesRev 가 본다 (그땐 쓴다).
+func TestPutTableSameWithBOMWritesNothing(t *testing.T) {
+	ts, s, dir := newTestServer(t)
+	path := filepath.Join(dir, "item.json")
+	if code, body := putTable(t, ts, s, "item", tableRev(t, ts, s, "item"), itemRows(12)); code != http.StatusOK { // Format 꼴로 맞춰 둔다
+		t.Fatalf("첫 표 PUT 이 %d 다: %v", code, body)
+	}
+	before := addBOM(t, path)
+
+	rev := tableRev(t, ts, s, "item")
+	code, body := putTable(t, ts, s, "item", rev, itemRows(12))
+	if code != http.StatusOK || body["rev"] != rev {
+		t.Fatalf("BOM 만 다른 표 PUT 이 %d, rev %v 다 (보낸 rev %s 그대로여야 한다)", code, body["rev"], rev)
+	}
+	if after, _ := os.ReadFile(path); !bytes.Equal(before, after) {
+		t.Fatal("내용이 같은데 item.json 을 다시 썼다 (BOM 이 걷혔다)")
+	}
+}
+
+// planEdit 의 「같은 내용이면 안 쓴다」 견줌은 받은 바이트(If-Match 로 확인한 것)로 한다 — 디스크를 다시 읽지 않는다.
+// 잠금 안에서 그사이 디스크가 바뀐 꼴을 만들어(받은 바이트 ≠ 디스크) 어느 쪽과 견주나 본다.
+func TestPlanEditComparesGivenSchemaBytes(t *testing.T) {
+	ts, s, dir := newTestServer(t)
+	path := filepath.Join(dir, "schema.json")
+	rev, source := schemaSource(t, ts, s)
+	if code, body := putSchema(t, ts, s, rev, editBody(source, "[]")); code != http.StatusOK { // Format 꼴로 맞춰 둔다
+		t.Fatalf("첫 스키마 PUT 이 %d 다: %v", code, body)
+	}
+	formatted, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var edit schemaEdit
+	if err := json.Unmarshal([]byte(editBody(source, "[]")), &edit); err != nil {
+		t.Fatal(err)
+	}
+	// 디스크만 바뀐다 (끝에 빈 줄 하나 — JSON 뜻은 같아 loadAll 은 그대로 읽는다).
+	changed := append(append([]byte{}, formatted...), '\n')
+	if err := os.WriteFile(path, changed, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hasSchema := func(given []byte) bool {
+		t.Helper()
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		plan, err := s.planEdit(&edit, given, false)
+		if err != nil || len(plan.problems) > 0 {
+			t.Fatalf("planEdit 이 %v / 문제 %d 건이다", err, len(plan.problems))
+		}
+		for _, f := range plan.files {
+			if f.File == "schema.json" {
+				return true
+			}
+		}
+		return false
+	}
+	if hasSchema(formatted) {
+		t.Fatal("받은 바이트는 Format 꼴인데 schema.json 을 쓰려 한다 — 디스크를 다시 읽어 견줬다")
+	}
+	if !hasSchema(changed) {
+		t.Fatal("받은 바이트가 Format 꼴과 다른데 schema.json 을 안 쓰려 한다")
 	}
 }

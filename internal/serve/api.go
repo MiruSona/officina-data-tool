@@ -1,7 +1,6 @@
 package serve
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -183,17 +182,19 @@ func (s *Server) saveTable(name, want, wantSchema string, rows []json.RawMessage
 	if err != nil {
 		return http.StatusBadRequest, errorBody(err)
 	}
-	// 디스크와 같은 바이트면 안 쓴다. 새 rev 는 다시 읽지 않고 쓴 바이트로 낸다 — 그사이 밖의 변경이 섞이지 않게.
-	if !bytes.Equal(out, raw) {
+	// 디스크와 같은 내용이면 안 쓴다 (BOM 은 걷고 CRLF 는 안 걷는 견줌 — textfile.SameContent).
+	// 안 썼으면 rev 는 디스크(BOM 포함) 그대로, 썼으면 다시 읽지 않고 쓴 바이트로 낸다 — 그사이 밖의 변경이 섞이지 않게.
+	if !textfile.SameContent(out, raw) {
 		if err := table.WriteFile(path, out); err != nil {
 			return http.StatusInternalServerError, errorBody(err)
 		}
+		rev = revOf(out)
 	}
 	return http.StatusOK, map[string]any{
 		"ok": true, "name": name, "rows": len(t.Rows),
 		"path":      filepath.ToSlash(filepath.Base(path)),
 		"warnings":  warnings,
-		"rev":       revOf(out),
+		"rev":       rev,
 		"schemaRev": schemaRev,
 	}
 }

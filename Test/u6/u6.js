@@ -840,14 +840,19 @@ async function schemaRevScenarios() {
 // delayNextPut 은 페이지 안 fetch 를 감싸 다음 표 PUT 의 응답을 붙잡는다. 요청은 바로 서버에 가서 디스크에 써지고,
 // 웹이 받는 답만 releasePut() 때까지 미뤄진다 — 「저장 중」 을 사람 손 빠르기와 상관없이 늘 같은 길로 만든다.
 // ms 를 주면 그만큼 뒤 저절로 풀린다 (0 이면 releasePut 만 기다린다).
+// 서버 답이 웹에 닿으면 window.__putArrived 가 켜진다 — 「서버가 PUT 처리를 끝냈다(쓸 것이면 썼다)」 신호다.
+// 400·409 도 답이 닿으면 켜지므로 「디스크에 써졌다」 는 뜻이 아니다.
 async function delayNextPut(ms = 0) {
   await page.eval(`(() => {
     const orig = window.fetch;
     window.__putHeld = false;
+    window.__putArrived = false;
     window.fetch = (input, init) => {
       if (!(init && init.method === "PUT" && String(input).startsWith("/api/table/"))) return orig(input, init);
       window.fetch = orig;
       const real = orig(input, init);
+      const arrived = () => { window.__putArrived = true; };
+      real.then(arrived, arrived);
       window.__putHeld = true;
       return new Promise((resolve, reject) => {
         window.__releasePut = () => { window.__putHeld = false; real.then(resolve, reject); };
@@ -861,14 +866,13 @@ async function startHeldSave() {
   await delayNextPut();
   await hideToast();
   await clickButton("save");
-  await page.waitFor("window.__putHeld === true");
-  await page.sleep(300); // 서버가 쓰기를 마칠 시간 — 답만 붙잡혀 있다
+  await page.waitFor("window.__putHeld === true && window.__putArrived === true"); // 서버는 썼고 답만 붙잡혀 있다
 }
 // releasePut 은 붙잡은 답을 풀고 저장 처리가 끝날 때까지 기다린다.
+// state.saving 은 save() 의 finally 에서 꺼진다 — 토스트·문제 목록·빨간 칸·refreshList 가 다 끝난 뒤다.
 async function releasePut() {
   await page.eval("(window.__releasePut(), true)");
   await page.waitFor("!state.saving");
-  await page.sleep(200);
 }
 const problemView = () => page.eval(`({ count: document.getElementById("problemCount").textContent,
   html: document.getElementById("problemList").innerHTML,
@@ -980,6 +984,71 @@ async function inFlightScenarios() {
           J(after.schema) === J(want) && J(after.column) === J(want) && J(after.draft) === J(want) &&
           after.dirty === false && after.atk === 70 && outside === "체력 물약 3 밖" && J(items) === J(want) &&
           saved.includes("저장했다") && itemLine("item_0010").includes(`"atk":4321`) };
+    });
+
+  // T14 — 저장 중 같은 표를 표 목록에서 다시 열면 grid 가 새로 선다. 늦게 온 400 은 새 grid 에 빨간 칸·문제 목록을 안 그린다.
+  //        400 길 문턱이 이름(state.name === name)이 아니라 grid(state.grid === grid)여야 잡힌다 — 이름은 그대로 item 이다.
+  await scenario("T14", "저장 중 같은 표 다시 열기 → 늦은 400 은 새 grid 를 안 건드림", "없음", none, async () => {
+    await editCell("item_0005", "atk", "-5"); // 위쪽 행이라 가상 렌더링에서도 칸이 화면(DOM)에 있다
+    await startHeldSave();
+    await page.eval(`(window.__oldGrid = state.grid, true)`);
+    const d0 = dialogs().length;
+    const r = await rectOf(`[...document.querySelectorAll("#tableList button")].find((b) => b.firstChild.textContent === "item")`);
+    await page.click(r.x, r.y);
+    await page.waitFor(`state.grid !== window.__oldGrid && state.grid.getDataCount() > 0 && !state.dirty`);
+    const confirmed = dialogs().length > d0;
+    const pBefore = await problemView();
+    await countToasts();
+    await releasePut();
+    const pAfter = await problemView();
+    const got = await page.eval(`({ name: state.name, dirty: state.dirty, rev: state.rev, toasts: window.__toasts,
+      text: document.getElementById("toast").textContent,
+      badDom: document.querySelectorAll("#table .tabulator-cell.bad").length,
+      badCell: state.grid.getRow("item_0005").getCell("atk").getElement().classList.contains("bad"),
+      atk: state.grid.getRow("item_0005").getData().atk })`);
+    await page.shot(path.join(A.out, "T14-reopened.png"));
+    return { note: `확인창 ${confirmed} · 문제 수 ${pBefore.count}→${pAfter.count} · 꼬리표 ${pAfter.stale} · 빨간 칸 ${got.badDom}/${got.badCell}` +
+        ` · 토스트 ${got.toasts}번 「${got.text.slice(0, 20)}」 · dirty ${got.dirty} · 칸 ${got.atk} · rev 맞음 ${got.rev === fileRev("item.json")}`,
+      ok: confirmed && pBefore.count === "0" && pAfter.count === "0" && !pAfter.stale && pAfter.html === pBefore.html &&
+        got.badDom === 0 && !got.badCell && got.toasts === 1 && got.text.includes("검증에 걸려") &&
+        got.name === "item" && got.dirty === false && got.atk !== -5 && got.rev === fileRev("item.json") };
+  });
+
+  // T15 — 스키마 409 토스트를 둔 채 다른 표로 옮기면(확인창 받아들임) 토스트는 닫힌다. 낡은 「다시 읽기」 를 억지로 눌러도
+  //        지금 표(grid·rev·dirty)와 state.schema 는 그대로, 새 요청·토스트도 없다 (리뷰 4번 — 실행부의 이름 검사).
+  await scenario("T15", "스키마 409 뒤 딴 표로 옮김 → 낡은 「다시 읽기」 는 아무것도 안 함", "schema.json 1 1 (밖에서 바꾼 것만)",
+    only("schema.json", 1, 1), async () => {
+      const c = await schemaConflictSave();
+      await page.eval(`(window.__staleSchema = document.getElementById("toastReloadSchema"), true)`);
+      const d0 = dialogs().length;
+      await page.eval(`openTable("monster").then(() => true)`); // dirty 라 확인창이 뜬다 — cdp 가 받아들인다
+      await page.waitFor(`state.name === "monster" && state.grid.getDataCount() > 0 && !state.dirty`);
+      const confirmed = dialogs().length > d0;
+      const closed = await page.eval(`document.getElementById("toast").hidden`);
+      await editCell("mon_1", "name", "T15편집");
+      await countToasts();
+      const look = `({ name: state.name, rev: state.rev, schemaRev: state.schemaRev, dirty: state.dirty, grades: state.schema.enums.Grade.length,
+        same: state.grid === window.__g, value: state.grid.getRow("mon_1").getData().name, toasts: window.__toasts })`;
+      const before = await page.eval(`(window.__g = state.grid, ${look})`);
+      // 단추는 hidden 토스트 안에 있다 — 사람 손으론 못 누르니 click() 을 바로 불러 실행부까지 간다.
+      // 실행부(reloadAfterConflict)는 이름 검사 뒤 reloadSchemaThen·openTable 을 같은 박자에 부른다. 그래서 두 함수와
+      // fetch 를 감싸 세면 click() 이 돌아온 그 자리에서 판정이 끝난다 — 답을 기다리는 sleep 이 필요 없다.
+      // (두 함수는 전역 function 선언이라 window 속성을 바꾸면 페이지 안의 호출도 감싼 쪽으로 간다.)
+      const spied = await page.eval(`(() => { const names = ["fetch", "openTable", "reloadSchemaThen"];
+        const orig = {}, n = { fetch: 0, openTable: 0, reloadSchemaThen: 0 };
+        for (const k of names) { orig[k] = window[k]; window[k] = (...a) => { n[k]++; return orig[k](...a); }; }
+        try { window.__staleSchema.click(); } finally { for (const k of names) window[k] = orig[k]; }
+        return n; })()`);
+      const fetched = spied.fetch;
+      const after = await page.eval(look);
+      await page.shot(path.join(A.out, "T15-stale-schema.png"));
+      await page.eval("setDirty(false), true");
+      return { note: `${c.text.slice(0, 30)}… · 단추 ${c.reload} · 확인창 ${confirmed} · 옮긴 뒤 토스트 닫힘 ${closed} · 요청 ${fetched}건 · 호출 ${J(spied)}` +
+          ` · 앞 ${J({ ...before, rev: before.rev.slice(0, 8), schemaRev: before.schemaRev.slice(0, 8) })}` +
+          ` · 뒤 ${J({ ...after, rev: after.rev.slice(0, 8), schemaRev: after.schemaRev.slice(0, 8) })}`,
+        ok: c.reload && confirmed && closed && fetched === 0 && spied.openTable === 0 && spied.reloadSchemaThen === 0 && before.name === "monster" && before.dirty === true && before.grades === 3 &&
+          after.name === "monster" && after.same && after.rev === before.rev && after.schemaRev === before.schemaRev &&
+          after.dirty === true && after.grades === 3 && after.value === "T15편집" && after.toasts === before.toasts };
     });
 }
 

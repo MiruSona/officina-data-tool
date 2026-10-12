@@ -19,6 +19,7 @@ import (
 	"github.com/mirusona/officina-data-tool/internal/migrate"
 	"github.com/mirusona/officina-data-tool/internal/schema"
 	"github.com/mirusona/officina-data-tool/internal/table"
+	"github.com/mirusona/officina-data-tool/internal/textfile"
 	"github.com/mirusona/officina-data-tool/internal/validate"
 )
 
@@ -99,12 +100,12 @@ func (s *Server) handleSchemaPlan(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, rev, err := s.readSchemaFile()
+	raw, rev, err := s.readSchemaFile()
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	plan, err := s.planEdit(edit, true)
+	plan, err := s.planEdit(edit, raw, true)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -130,7 +131,7 @@ func (s *Server) putSchema(w http.ResponseWriter, r *http.Request) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, rev, err := s.readSchemaFile()
+	raw, rev, err := s.readSchemaFile()
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -141,7 +142,7 @@ func (s *Server) putSchema(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	plan, err := s.planEdit(edit, false)
+	plan, err := s.planEdit(edit, raw, false)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -182,8 +183,10 @@ func writtenSchemaRev(pending []table.Pending, old string) string {
 }
 
 // planEdit 는 설계 4장의 2~7 을 메모리에서 돈다. 부르는 쪽이 s.mu 를 잡고 온다.
+// schemaRaw 는 부르는 쪽이 rev 를 낸(If-Match 로 확인한) schema.json 디스크 바이트다 — 「같은 내용이면 안 쓴다」
+// 견줌을 그 바이트로 한다. 여기서 다시 읽으면 rev 와 견줌이 서로 다른 판을 볼 수 있다 (표 PUT 의 「한 번 읽기」 와 같은 꼴).
 // 돌려주는 error 는 디스크를 못 읽은 것뿐이다. 본문·데이터의 잘못은 plan.problems 에 담는다.
-func (s *Server) planEdit(edit *schemaEdit, withGit bool) (*editPlan, error) {
+func (s *Server) planEdit(edit *schemaEdit, schemaRaw []byte, withGit bool) (*editPlan, error) {
 	plan := &editPlan{files: []fileChange{}, problems: []*validate.Problem{}, warnings: []*validate.Problem{}, notes: []string{}}
 	old, tables, err := s.loadAll()
 	if err != nil {
@@ -222,7 +225,7 @@ func (s *Server) planEdit(edit *schemaEdit, withGit bool) (*editPlan, error) {
 		return plan, nil
 	}
 
-	if err := s.collectPending(plan, next, moved); err != nil {
+	if err := s.collectPending(plan, next, moved, schemaRaw); err != nil {
 		return nil, err
 	}
 	if withGit && len(plan.pending) > 0 {
@@ -232,7 +235,8 @@ func (s *Server) planEdit(edit *schemaEdit, withGit bool) (*editPlan, error) {
 }
 
 // collectPending 은 달라지는 파일만 모은다. 차례는 표(스키마 차례) 먼저, schema.json 마지막이다.
-func (s *Server) collectPending(plan *editPlan, next *schema.File, moved *migrate.Result) error {
+// schema.json 은 다시 읽지 않고 받은 schemaRaw(rev 를 낸 바이트)와 견준다.
+func (s *Server) collectPending(plan *editPlan, next *schema.File, moved *migrate.Result, schemaRaw []byte) error {
 	for _, name := range next.TableNames() {
 		t := moved.Tables[name]
 		out, err := t.Format(next.Table(name))
@@ -252,11 +256,8 @@ func (s *Server) collectPending(plan *editPlan, next *schema.File, moved *migrat
 		plan.pending = append(plan.pending, table.Pending{Path: path, Data: out})
 	}
 
-	raw, _, err := s.readSchemaFile()
-	if err != nil {
-		return err
-	}
-	if out := next.Format(); !bytes.Equal(out, raw) {
+	// BOM 만 다른 파일은 안 쓴다(rev 도 그대로) — 견줌 규칙은 textfile.SameContent.
+	if out := next.Format(); !textfile.SameContent(out, schemaRaw) {
 		path, err := s.writablePath(table.SchemaFileName)
 		if err != nil {
 			return err

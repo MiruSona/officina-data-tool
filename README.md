@@ -116,7 +116,7 @@ datatool serve --data GameData --port 0 --open
 | `POST /api/gen` | CLI `gen` 과 같다 — 먼저 validate(V10 은 오류), 그다음 `.datatool.json` 의 `gen` 폴더에 C# 을 쓴다. 칸이 없으면 400 |
 | `GET /api/tables` | 표 이름과 행 수 |
 | `GET /api/table/{이름}` | 행 배열. 기본값이라 파일에서 빠진 열은 서버가 채워서 준다 + `rev`(표 파일 바이트의 sha256) · `schemaRev`(같은 때의 schema.json rev = `GET /api/schema` 의 `rev`) |
-| `PUT /api/table/{이름}` | 행 배열 통째 + `If-Match: <rev>`(필수) + `X-Schema-Rev: <schemaRev>`(고름 · If-Match 와 같이 걷는다, 없거나 `*` 면 안 봄). If-Match 가 없으면 428 · 표 rev 가 다르면 409 `conflict:"table"` · 스키마 rev 가 다르면 409 `conflict:"schema"` — 409 본문은 `{ok:false, conflict, rev, schemaRev, error}` 이고 **아무것도 안 쓴다** · 검증에 걸리면 400. 통과하면 tmp→이름바꾸기로 저장하고 200 에 **쓴 바이트의 새 rev** · `schemaRev`. 디스크 표 파일이 깨졌으면 409 다 (GET 이 400 이라 그 rev 를 가질 수 없다) |
+| `PUT /api/table/{이름}` | 행 배열 통째 + `If-Match: <rev>`(필수) + `X-Schema-Rev: <schemaRev>`(고름 · If-Match 와 같이 걷는다, 없거나 `*` 면 안 봄). If-Match 가 없으면 428 · 표 rev 가 다르면 409 `conflict:"table"` · 스키마 rev 가 다르면 409 `conflict:"schema"` — 409 본문은 `{ok:false, conflict, rev, schemaRev, error}` 이고 **아무것도 안 쓴다** · 검증에 걸리면 400. 통과하면 tmp→이름바꾸기로 저장하고 200 에 **쓴 바이트의 새 rev** · `schemaRev`. 쓸 바이트가 디스크와 같으면(BOM 만 다른 것도 같다고 본다) 안 쓰고 rev 는 디스크(BOM 포함) 그대로. 디스크 표 파일이 깨졌으면 409 다 (GET 이 400 이라 그 rev 를 가질 수 없다) |
 | `POST /api/validate` | `validate` 와 같은 일. 한 글자도 안 쓴다. V10 도 오류로 센다 · 응답에 `warnings` |
 | `GET /api/assetindex` | 색인 요약 (`ok` · `missing` · `stale` · `notes` · `entries`). **부를 때마다 파일을 다시 읽는다.** 색인이 깨졌으면 200 + `ok:false` |
 | `GET /api/asset?address=<주소>` | 원본 파일 바이트 (미리보기용). 막기와 형식 표는 아래 「asset 열」 |
