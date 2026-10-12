@@ -617,6 +617,7 @@ async function run() {
   }, "drop");
 
   await schemaScenarios();
+  await tableRevScenarios();
 
   // D1 — 서버를 끄고 저장 (맨 끝). 서버가 죽으니 늘 마지막이다.
   await scenario("D1", "서버를 끄고 저장", "빨간 토스트 「서버에 못 닿았다」 · dirty · 없음", none, async () => {
@@ -630,6 +631,104 @@ async function run() {
     await page.shot(path.join(A.out, "D1-unreachable.png"));
     return { note: `${text} · 빨강 ${bad} · dirty ${dirty}`, ok: text.includes("서버에 못 닿았다") && bad && dirty };
   });
+}
+
+/* 표 저장 rev (설계 2026-10-12 표저장rev 5-2) ------------------------- */
+
+// countToasts 는 전역 toast 를 감싸 띄운 개수를 센다 (app.js 는 보통 script 라 갈아 끼울 수 있다).
+async function countToasts() {
+  await page.eval(`(() => { window.__toasts = 0; const orig = toast; window.toast = (...a) => { window.__toasts++; return orig(...a); }; return 1; })()`);
+}
+// conflictSave 는 칸 하나를 고친 뒤 밖에서 item.json 끝에 빈 줄을 더하고 저장해 409 를 낸다 (T1·T2).
+async function conflictSave() {
+  await editCell("item_0010", "atk", "4321");
+  fs.appendFileSync(path.join(A.data, "item.json"), "\n"); // 다른 사람·편집기가 고친 것
+  const text = await clickSave();
+  const got = await page.eval(`({ reload: !!document.getElementById("toastReload"), dirty: state.dirty,
+    bad: document.getElementById("toast").classList.contains("bad") })`);
+  return { text, ...got };
+}
+const itemLine = (id) => readData("item.json").split("\n").find((l) => l.startsWith(`{"id":${J(id)}`)) || "";
+
+async function tableRevScenarios() {
+  await scenario("T1", "밖에서 item.json 이 바뀐 뒤 저장 → 409", "item.json 1 0 (밖에서 더한 줄만)", only("item.json", 1, 0), async () => {
+    const c = await conflictSave();
+    await page.shot(path.join(A.out, "T1-conflict.png"));
+    // 409 토스트를 둔 채 monster 로 옮겨 고치면 토스트는 닫히고, 낡은 「다시 읽기」 는 monster 편집을 안 버린다.
+    await page.eval(`(window.__staleReload = document.getElementById("toastReload"), true)`);
+    await openTable("monster");
+    const closed = await page.eval(`document.getElementById("toast").hidden`);
+    await editCell("mon_1", "name", "T1편집");
+    await page.eval(`(window.__staleReload.click(), true)`);
+    await page.sleep(400);
+    const stale = await page.eval(`({ name: state.name, dirty: state.dirty, value: state.grid.getRow("mon_1").getData().name })`);
+    await page.eval("setDirty(false), true");
+    return { note: `${c.text} · 다시 읽기 단추 ${c.reload} · 빨강 ${c.bad} · dirty ${c.dirty} · 옮긴 뒤 토스트 닫힘 ${closed} · 낡은 단추 뒤 ${J(stale)}`,
+      ok: c.text.includes("바뀌었다") && c.reload && c.bad && c.dirty === true && closed &&
+        stale.name === "monster" && stale.dirty === true && stale.value === "T1편집" };
+  });
+
+  await scenario("T2", "409 뒤 「다시 읽기」 → 다시 고쳐 저장", "item.json 1 1", only("item.json", 1, 1), async () => {
+    // 「다시 읽기」 의 GET 이 실패하면 고친 것과 dirty 가 그대로 남는다.
+    const failed = await conflictSave();
+    await page.eval(`(() => { const orig = window.fetch; window.fetch = (...a) => { window.fetch = orig; return Promise.reject(new Error("T2")); }; return 1; })()`);
+    await hideToast();
+    await page.eval(`(document.getElementById("toastReload").click(), true)`);
+    const failText = await waitToast();
+    const kept = await page.eval(`({ dirty: state.dirty, atk: state.grid.getRow("item_0010").getData().atk })`);
+    // 다시 저장하면 또 409 — 이번엔 「다시 읽기」 가 된다.
+    const c = await clickSave().then(async (text) => ({ text, reload: await page.eval(`!!document.getElementById("toastReload")`) }));
+    const revBefore = await page.eval("state.rev");
+    await clickButton("toastReload");
+    await page.waitFor(`!state.dirty && state.rev !== ${J(revBefore)} && state.grid.getRow("item_0010").getData().atk === 70`);
+    await page.sleep(200);
+    const back = await page.eval(`({ dirty: state.dirty, atk: state.grid.getRow("item_0010").getData().atk })`);
+    await page.shot(path.join(A.out, "T2-reloaded.png"));
+    await editCell("item_0010", "atk", "4321");
+    const text = await clickSave();
+    await page.shot(path.join(A.out, "T2-saved.png"));
+    return { note: `${failed.text.slice(0, 20)}… · 읽기 실패 「${failText}」 ${J(kept)} · 다시 409 ${c.reload} · 다시 읽은 뒤 ${J(back)} · ${text}`,
+      ok: failed.reload && failText.includes("못 닿았다") && kept.dirty === true && kept.atk === 4321 &&
+        c.text.includes("바뀌었다") && c.reload && !back.dirty && back.atk === 70 && text.includes("저장했다") && itemLine("item_0010").includes(`"atk":4321`) };
+  });
+
+  await scenario("T3", "같은 칸을 5 → 6 으로 두 번 저장 (새 rev)", "item.json 1 1", only("item.json", 1, 1), async () => {
+    await editCell("item_0010", "atk", "5");
+    const first = await clickSave();
+    await editCell("item_0010", "atk", "6");
+    const second = await clickSave();
+    const line = itemLine("item_0010");
+    return { note: `${first} · ${second} · ${line}`,
+      ok: first.includes("저장했다") && second.includes("저장했다") && !second.includes("바뀌었다") && line.includes(`"atk":6,`) };
+  });
+
+  await scenario("T4", "고친 뒤 Ctrl+S 두 번 빨리", "item.json 1 1 · 토스트 1번", only("item.json", 1, 1), async () => {
+    await editCell("item_0010", "atk", "4444");
+    await countToasts();
+    await hideToast();
+    await page.key("s", "KeyS", 83, MOD.ctrl);
+    await page.key("s", "KeyS", 83, MOD.ctrl);
+    const text = await waitToast();
+    await page.sleep(1000); // 둘째가 PUT 을 냈다면 그 답이 올 시간
+    const got = await page.eval(`({ toasts: window.__toasts, dirty: state.dirty, text: document.getElementById("toast").textContent })`);
+    return { note: `${text} · 토스트 ${got.toasts}번 · dirty ${got.dirty}`,
+      ok: got.toasts === 1 && !got.text.includes("바뀌었다") && text.includes("저장했다") && !got.dirty };
+  });
+
+  await scenario("T5", "drop 열기(ref 로 item GET) → 한 칸 저장", "drop.json 1 1", only("drop.json", 1, 1), async () => {
+    await editCell("drop_5", "rate", "0.75");
+    const text = await clickSave();
+    return { note: text, ok: text.includes("저장했다") };
+  }, "drop");
+
+  await scenario("T6", "밖에서 monster.json 한 줄 고친 뒤 item 저장", "item.json 1 1 · monster.json 1 1",
+    exactly([["item.json", 1, 1], ["monster.json", 1, 1]]), async () => {
+      const file = readData("monster.json");
+      fs.writeFileSync(path.join(A.data, "monster.json"), file.replace(`"name":"몬스터 3"`, `"name":"몬스터 3 밖"`));
+      await editCell("item_0010", "atk", "4321");
+      const text = await clickSave();
+      return { note: text, ok: text.includes("저장했다") };
+    });
 }
 
 /* 스키마 · Enum 탭 (설계 2026-10-04 5장) ------------------------------- */

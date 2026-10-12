@@ -15,6 +15,9 @@ const state = {
   name: "",           // 지금 보고 있는 표
   grid: null,         // Tabulator 인스턴스
   dirty: false,
+  rev: "",            // 보던 표의 디스크 rev. 표 PUT 의 If-Match 에 싣는다 (설계 2026-10-12 표저장rev)
+  saving: false,      // 표 저장 중 — Ctrl+S 연타의 둘째를 무시한다
+  editGen: 0,         // 편집 세대. setDirty(true) 마다 늘어 저장 중 편집을 알아본다
   active: null,       // 마지막으로 누른 행 (범위가 비었을 때 행 지우기가 쓴다)
   activeCell: null,   // 마지막으로 누른 칸 (정렬 뒤 범위를 다시 세울 때 쓴다)
   undoing: false,     // 묶음 되돌리기 중 — historyUndo·historyRedo 재진입을 막는다
@@ -53,17 +56,33 @@ async function api(path, options = {}) {
 
 let toastTimer = 0;
 
-function toast(message, bad) {
+// action({ id, label, run }) 을 주면 단추를 단다. 단추가 있는 토스트는 저절로 안 사라진다 —
+// 다음 토스트나 단추 누름에 닫힌다.
+function toast(message, bad, action) {
   const el = $("toast");
   el.textContent = message;
   el.classList.toggle("bad", !!bad);
   el.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { el.hidden = true; }, bad ? 6000 : 3000);
+  if (!action) {
+    toastTimer = setTimeout(() => { el.hidden = true; }, bad ? 6000 : 3000);
+    return;
+  }
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "btn mini toast-action";
+  button.id = action.id;
+  button.textContent = action.label;
+  button.addEventListener("click", () => {
+    el.hidden = true;
+    action.run();
+  });
+  el.append(" ", button);
 }
 
 function setDirty(on) {
   state.dirty = on;
+  if (on) state.editGen++;
   $("dirty").hidden = !on;
   if (typeof syncLocks === "function") syncLocks(); // schema.js — 행 편집 중엔 스키마 편집을 막는다
 }
@@ -858,8 +877,9 @@ function pasteAction(rows) {
 
 /* 표 열기·저장 -------------------------------------------------------- */
 
-async function openTable(name) {
-  if (state.dirty && !confirm("저장 안 한 변경이 있다. 버리고 옮길까?")) return;
+// skipConfirm 은 409 「다시 읽기」 가 쓴다 — 버린다고 이미 고른 것이다. dirty 는 읽기가 됐을 때만 꺼진다.
+async function openTable(name, { skipConfirm = false } = {}) {
+  if (!skipConfirm && state.dirty && !confirm("저장 안 한 변경이 있다. 버리고 옮길까?")) return;
 
   const res = await api(`/api/table/${encodeURIComponent(name)}`);
   if (!res.body.ok) {
@@ -867,6 +887,8 @@ async function openTable(name) {
     return;
   }
   state.name = name;
+  state.rev = res.body.rev || "";
+  if ($("toastReload")) $("toast").hidden = true; // 떠 있던 409 토스트는 옛 판 이야기다
   await loadRefIDs(res.body.columns);
   await loadAssets(res.body.columns);
 
@@ -945,6 +967,7 @@ function replayGroup(step, remaining, renumber) {
 
 // ref 열이 가리키는 표의 id 목록을 미리 받아 둔다. 드롭다운이 이것으로 뜬다.
 // 못 받았으면 캐시에 안 넣는다 — 다음에 표를 열 때 다시 받는다.
+// 이 GET 의 rev 는 딴 표의 것이라 state.rev 에 손대지 않는다 — rev 는 openTable 에서만 받는다.
 async function loadRefIDs(columns) {
   const wanted = [...new Set(columns.filter((c) => c.base === "ref").map((c) => c.ref))];
   for (const name of wanted) {
@@ -970,32 +993,63 @@ async function commitOpenEditor() {
   await new Promise((done) => requestAnimationFrame(() => setTimeout(done, 0)));
 }
 
+// 저장은 GET 이 준 rev 를 If-Match 에 싣는다. 디스크가 그사이 바뀌었으면 서버가 409 로 안 쓴다.
+// 진행 중 막기·편집 세대·표 옮김 견줌은 설계 2026-10-12 표저장rev 3장·4장 함정 ④⑤⑨.
 async function save() {
-  if (!state.grid) return;
+  if (!state.grid || state.saving) return;
   if (rowsBlocked()) {
     toast(rowsBlocked(), true);
     return;
   }
+  state.saving = true;
+  try {
+    await saveTable();
+  } finally {
+    state.saving = false;
+  }
+}
+
+async function saveTable() {
   await commitOpenEditor();
-  const columns = state.grid.columns;
-  const rows = fromGrid(state.grid.getData(), columns);
-  const res = await api(`/api/table/${encodeURIComponent(state.name)}`, {
+  const grid = state.grid;
+  const name = state.name;
+  const gen = state.editGen;
+  const columns = grid.columns;
+  const rows = fromGrid(grid.getData(), columns);
+  const res = await api(`/api/table/${encodeURIComponent(name)}`, {
     method: "PUT",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "If-Match": state.rev },
     body: JSON.stringify(rows),
   });
   const warnings = res.body.warnings || [];
   if (res.body.ok) {
-    setDirty(false);
-    drawProblems([], warnings);
-    markBad(warnings);
-    state.ids.delete(state.name); // id 가 바뀌었을 수 있다
+    state.ids.delete(name); // id 가 바뀌었을 수 있다
+    // 저장 중 딴 표로 옮겼으면 rev·dirty·문제 목록·칸 표시는 지금 표 것이라 건드리지 않는다.
+    if (state.grid === grid) {
+      state.rev = res.body.rev;
+      if (state.editGen === gen) setDirty(false); // 저장 중 고친 것은 dirty 로 남아 다음 저장에 들어간다
+      drawProblems([], warnings);
+      markBad(warnings);
+    }
     const v10 = warnings.some((w) => w.rule === "asset" || w.rule === "asset_kind");
-    let message = `${state.name}.json 을 저장했다 (${res.body.rows}행)`;
+    let message = `${name}.json 을 저장했다 (${res.body.rows}행)`;
     if (warnings.length) message += ` — 경고 ${warnings.length}건`;
     if (v10) message += ", asset 주소 경고는 CLI validate 에서는 오류다";
     toast(message, warnings.length > 0);
     await refreshList();
+    return;
+  }
+  if (res.status === 409) {
+    // dirty 와 state.rev 는 그대로 둔다 — rev 를 바꾸면 다음 저장이 디스크 것을 그냥 덮는다.
+    toast(`그사이 디스크의 ${name}.json 이 바뀌었다 — 아무것도 안 썼다. 「다시 읽기」 는 고친 것을 버리고 디스크 것을 읽는다. `
+      + "고친 것을 살리려면 칸을 복사해 뒀다가 다시 읽은 뒤 붙여 넣는다", true, {
+      id: "toastReload",
+      label: "다시 읽기",
+      run: () => {
+        if (state.name !== name) return; // 그사이 딴 표로 옮겼다 — 그 표의 편집을 버리지 않는다
+        openTable(name, { skipConfirm: true });
+      },
+    });
     return;
   }
   const problems = res.body.problems || [];

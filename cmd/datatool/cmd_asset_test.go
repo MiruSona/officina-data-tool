@@ -224,12 +224,31 @@ func TestServeSavedAssetFailsCLI(t *testing.T) {
 	}
 	ts := httptest.NewServer(server.Handler())
 	defer ts.Close()
+	// 표 PUT 은 If-Match 에 GET 이 준 rev 를 실어야 한다 (표저장rev설계 2-3).
+	get, err := http.NewRequest(http.MethodGet, ts.URL+"/api/table/card", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	get.Header.Set("X-Datatool-Token", server.Token())
+	got, err := ts.Client().Do(get)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var table struct {
+		Rev string `json:"rev"`
+	}
+	err = json.NewDecoder(got.Body).Decode(&table)
+	got.Body.Close()
+	if err != nil || table.Rev == "" {
+		t.Fatalf("card 의 rev 를 못 받았다: %v", err)
+	}
 	req, err := http.NewRequest(http.MethodPut, ts.URL+"/api/table/card", strings.NewReader(`[{"id":"sword","icon":"icns"}]`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	req.Header.Set("X-Datatool-Token", server.Token())
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("If-Match", table.Rev)
 	res, err := ts.Client().Do(req)
 	if err != nil {
 		t.Fatal(err)

@@ -1,6 +1,7 @@
 package serve
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"github.com/mirusona/officina-data-tool/internal/assetindex"
 	"github.com/mirusona/officina-data-tool/internal/schema"
 	"github.com/mirusona/officina-data-tool/internal/table"
+	"github.com/mirusona/officina-data-tool/internal/textfile"
 	"github.com/mirusona/officina-data-tool/internal/validate"
 )
 
@@ -49,6 +51,9 @@ func (s *Server) handleTable(w http.ResponseWriter, r *http.Request) {
 // 저장할 때 table.Format 이 같은 기본값을 도로 빼므로 왕복해도 파일이 그대로다.
 // UI 가 스키마를 보고 따로 채우면 「채우는 규칙」이 둘로 갈린다.
 func (s *Server) getTable(w http.ResponseWriter, name string) {
+	// 스키마와 표 바이트를 같은 잠금 안에서 읽는다 — 스키마 PUT 과 겨뤄 옛 열 + 새 표가 짝이 되지 않게.
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	sch, err := s.loadSchema()
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -67,9 +72,13 @@ func (s *Server) getTable(w http.ResponseWriter, name string) {
 		return
 	}
 
-	s.mu.Lock()
-	t, err := table.Load(path)
-	s.mu.Unlock()
+	// rev 와 행이 같은 판이도록 한 번 읽은 바이트에서 둘 다 낸다.
+	raw, rev, err := fileRev(path)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	t, err := table.Parse(textfile.TrimBOM(raw), path)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -79,16 +88,25 @@ func (s *Server) getTable(w http.ResponseWriter, name string) {
 		"name":    name,
 		"columns": columnsJSON(st),
 		"rows":    rowsJSON(t, st),
+		"rev":     rev,
 	})
 }
 
 // putTable 은 행 배열을 통째로 받아 **검증을 통과했을 때만** 파일을 다시 쓴다.
 //
 // 걸리면 한 글자도 안 쓰고 문제 목록을 400 으로 돌려준다 — 우회하는 문(--force)을 안 만든다.
+// If-Match 가 디스크 rev 와 다르면 409 로 안 쓴다. 차례는 Docs/Design/2026-10-12-표저장rev설계.md 2-4.
 func (s *Server) putTable(w http.ResponseWriter, r *http.Request, name string) {
 	if ct := r.Header.Get("Content-Type"); !isJSONType(ct) {
 		writeJSON(w, http.StatusUnsupportedMediaType, map[string]any{
 			"ok": false, "error": "Content-Type 이 application/json 이어야 한다",
+		})
+		return
+	}
+	want := ifMatchRev(r)
+	if want == "" {
+		writeJSON(w, http.StatusPreconditionRequired, map[string]any{
+			"ok": false, "error": "If-Match 머리에 GET /api/table/" + name + " 의 rev 를 실어 보낸다",
 		})
 		return
 	}
@@ -118,6 +136,17 @@ func (s *Server) putTable(w http.ResponseWriter, r *http.Request, name string) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	raw, rev, err := fileRev(path)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if want != rev {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"ok": false, "rev": rev, "error": "그사이 " + name + ".json 이 바뀌었다 — 다시 읽고 고친다",
+		})
+		return
+	}
 
 	t, err := parseRows(rows, path)
 	if err != nil {
@@ -138,14 +167,18 @@ func (s *Server) putTable(w http.ResponseWriter, r *http.Request, name string) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	if err := table.WriteFile(path, out); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
+	// 디스크와 같은 바이트면 안 쓴다. 새 rev 는 다시 읽지 않고 쓴 바이트로 낸다 — 그사이 밖의 변경이 섞이지 않게.
+	if !bytes.Equal(out, raw) {
+		if err := table.WriteFile(path, out); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "name": name, "rows": len(t.Rows),
 		"path":     filepath.ToSlash(filepath.Base(path)),
 		"warnings": warnings,
+		"rev":      revOf(out),
 	})
 }
 

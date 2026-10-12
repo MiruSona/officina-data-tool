@@ -3,8 +3,6 @@ package serve
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -122,7 +120,7 @@ func (s *Server) handleSchemaPlan(w http.ResponseWriter, r *http.Request) {
 // putSchema 는 검증을 다 통과했을 때만 표들과 schema.json 을 쓴다 (설계 4장).
 // 걸리면 한 글자도 안 쓴다. 우회하는 문(--force)은 없다.
 func (s *Server) putSchema(w http.ResponseWriter, r *http.Request) {
-	want := strings.TrimSpace(r.Header.Get("If-Match"))
+	want := ifMatchRev(r)
 	if want == "" {
 		writeJSON(w, http.StatusPreconditionRequired, map[string]any{
 			"ok": false, "error": "If-Match 머리에 GET /api/schema 의 rev 를 실어 보낸다",
@@ -142,7 +140,7 @@ func (s *Server) putSchema(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	if strings.Trim(want, `"`) != rev {
+	if want != rev {
 		writeJSON(w, http.StatusConflict, map[string]any{
 			"ok": false, "rev": rev, "error": "그사이 schema.json 이 바뀌었다 — 다시 읽고 고친다",
 		})
@@ -288,15 +286,9 @@ func (s *Server) writablePath(file string) (string, error) {
 	return path, nil
 }
 
-// readSchemaFile 은 schema.json 의 디스크 바이트와 rev(sha256)를 준다.
-// rev 는 BOM·줄끝까지 포함한 바이트로 낸다 — 손으로 고친 것도 「바뀜」으로 잡는다.
+// readSchemaFile 은 schema.json 의 디스크 바이트와 rev 를 준다.
 func (s *Server) readSchemaFile() ([]byte, string, error) {
-	raw, err := os.ReadFile(filepath.Join(s.root, table.SchemaFileName))
-	if err != nil {
-		return nil, "", err
-	}
-	sum := sha256.Sum256(raw)
-	return raw, hex.EncodeToString(sum[:]), nil
+	return fileRev(filepath.Join(s.root, table.SchemaFileName))
 }
 
 // names 는 절대경로를 데이터 폴더 기준 파일 이름으로 바꾼다.

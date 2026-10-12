@@ -296,7 +296,7 @@ func TestAssetIndexAPIAtlas(t *testing.T) {
 func TestPutAssetWarnsButSaves(t *testing.T) {
 	ts, s, l := newAssetServer(t)
 	rows := `[{"id":"sword","icon":"icns"},{"id":"hero","icon":"Hero"}]`
-	code, body := call(t, ts, s, http.MethodPut, "/api/table/card", rows)
+	code, body := putTable(t, ts, s, "card", tableRev(t, ts, s, "card"), rows)
 	if code != http.StatusOK {
 		t.Fatalf("저장이 %d 다: %v", code, body)
 	}
@@ -318,7 +318,7 @@ func TestPutAssetWarnsButSaves(t *testing.T) {
 		t.Fatalf("validate 는 V10 을 오류로 봐야 한다: %d %v", code, body)
 	}
 	// 그 밖의 오류(V3)는 저장 때도 막는다.
-	if code, _ = call(t, ts, s, http.MethodPut, "/api/table/card", `[{"id":"sword","icon":3}]`); code != http.StatusBadRequest {
+	if code, _ = putTable(t, ts, s, "card", tableRev(t, ts, s, "card"), `[{"id":"sword","icon":3}]`); code != http.StatusBadRequest {
 		t.Fatalf("타입 오류인데 %d 다", code)
 	}
 }
@@ -330,7 +330,7 @@ func TestPutManyAssetWarnings(t *testing.T) {
 	for i := 0; i < 101; i++ {
 		rows = append(rows, fmt.Sprintf(`{"id":"r%d","icon":"nope%d"}`, i, i))
 	}
-	code, body := call(t, ts, s, http.MethodPut, "/api/table/card", "["+strings.Join(rows, ",")+"]")
+	code, body := putTable(t, ts, s, "card", tableRev(t, ts, s, "card"), "["+strings.Join(rows, ",")+"]")
 	if code != http.StatusOK {
 		t.Fatalf("저장이 %d 다: %v", code, body["problems"])
 	}

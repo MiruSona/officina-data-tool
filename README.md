@@ -115,11 +115,17 @@ datatool serve --data GameData --port 0 --open
 | `PUT /api/schema` | 같은 본문 + `If-Match: <rev>`. 통과하면 표들과 schema.json 을 쓴다. rev 가 다르면 409 · 없으면 428 · 걸리면 400 (안 씀) |
 | `POST /api/gen` | CLI `gen` 과 같다 — 먼저 validate(V10 은 오류), 그다음 `.datatool.json` 의 `gen` 폴더에 C# 을 쓴다. 칸이 없으면 400 |
 | `GET /api/tables` | 표 이름과 행 수 |
-| `GET /api/table/{이름}` | 행 배열. 기본값이라 파일에서 빠진 열은 서버가 채워서 준다 |
-| `PUT /api/table/{이름}` | 행 배열 통째 → 검증 → 통과하면 tmp→이름바꾸기로 저장 (걸리면 400) |
+| `GET /api/table/{이름}` | 행 배열. 기본값이라 파일에서 빠진 열은 서버가 채워서 준다 + `rev`(표 파일 바이트의 sha256) |
+| `PUT /api/table/{이름}` | 행 배열 통째 + `If-Match: <rev>`(필수). 없으면 428 · 디스크 rev 와 다르면 409 `{ok:false, rev, error}` 이고 **아무것도 안 쓴다** · 검증에 걸리면 400. 통과하면 tmp→이름바꾸기로 저장하고 200 에 **쓴 바이트의 새 rev** |
 | `POST /api/validate` | `validate` 와 같은 일. 한 글자도 안 쓴다. V10 도 오류로 센다 · 응답에 `warnings` |
 | `GET /api/assetindex` | 색인 요약 (`ok` · `missing` · `stale` · `notes` · `entries`). **부를 때마다 파일을 다시 읽는다.** 색인이 깨졌으면 200 + `ok:false` |
 | `GET /api/asset?address=<주소>` | 원본 파일 바이트 (미리보기용). 막기와 형식 표는 아래 「asset 열」 |
+
+**스크립트로 표를 PUT 할 때** — 스키마 PUT 과 같은 틀이다.
+
+- 먼저 `GET /api/table/{이름}` 으로 `rev` 를 받아 `If-Match` 에 싣는다. 따옴표·`W/` 접두는 걷고 보고, `*` 는 없는 것과 같다(428).
+- 연달아 고칠 때는 200 이 준 새 `rev` 를 다음 PUT 에 쓴다. 옛 rev 를 다시 쓰면 자기 저장 때문에 409 가 난다. 쓸 바이트가 디스크와 같으면 안 쓰고 rev 가 그대로다.
+- 409 면 다시 GET 해서 디스크 것 위에 고친 뒤 보낸다. 강제로 덮는 길은 없다.
 
 **파일을 쓰는 곳은 셋이다.** 셋 다 토큰·Host 문지기(`guard`)와 본문 상한 32MB 를 지난다. 브라우저에서 경로를 받지 않는다.
 

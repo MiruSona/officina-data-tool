@@ -63,6 +63,42 @@ func call(t *testing.T, ts *httptest.Server, s *Server, method, path, body strin
 	return res.StatusCode, out
 }
 
+// tableRev 는 GET /api/table/{name} 이 준 rev 다. PUT 의 If-Match 에 싣는다.
+func tableRev(t *testing.T, ts *httptest.Server, s *Server, name string) string {
+	t.Helper()
+	code, body := call(t, ts, s, http.MethodGet, "/api/table/"+name, "")
+	rev, _ := body["rev"].(string)
+	if code != http.StatusOK || rev == "" {
+		t.Fatalf("%s 의 rev 를 못 받았다: %d %v", name, code, body)
+	}
+	return rev
+}
+
+// putTable 은 If-Match 를 실은 표 PUT 이다. rev 가 "" 면 머리 없이 보낸다 (call 은 머리를 못 더한다).
+func putTable(t *testing.T, ts *httptest.Server, s *Server, name, rev, body string) (int, map[string]any) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPut, ts.URL+"/api/table/"+name, strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set(tokenHeader, s.Token())
+	req.Header.Set("Content-Type", "application/json")
+	if rev != "" {
+		req.Header.Set("If-Match", rev)
+	}
+	res, err := ts.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	raw, _ := io.ReadAll(res.Body)
+	out := map[string]any{}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("PUT %s 의 답이 JSON 이 아니다: %s", name, raw)
+	}
+	return res.StatusCode, out
+}
+
 func TestTableListAndRead(t *testing.T) {
 	ts, s, _ := newTestServer(t)
 
@@ -100,7 +136,7 @@ func TestPutWritesFormatted(t *testing.T) {
 	{"id":"slime_blue","name":"파랑 슬라임","hp":45,"element":"ice"},
 	{"id":"wolf_gray","name":"잿빛 늑대","hp":120},
 	{"id":"golem_fire","name":"불의 골렘","hp":900}]`
-	code, body := call(t, ts, s, http.MethodPut, "/api/table/monster", rows)
+	code, body := putTable(t, ts, s, "monster", tableRev(t, ts, s, "monster"), rows)
 	if code != http.StatusOK {
 		t.Fatalf("저장이 %d 다: %v", code, body)
 	}
@@ -122,7 +158,7 @@ func TestPutRejectsInvalid(t *testing.T) {
 
 	// atk 가 문자열이다 (V3). 한 글자도 쓰면 안 된다.
 	rows := `[{"id":"sword_iron","name":"철검","atk":"12"}]`
-	code, body := call(t, ts, s, http.MethodPut, "/api/table/item", rows)
+	code, body := putTable(t, ts, s, "item", tableRev(t, ts, s, "item"), rows)
 	if code != http.StatusBadRequest {
 		t.Fatalf("검증 실패인데 %d 다: %v", code, body)
 	}
@@ -210,7 +246,7 @@ func TestPutRejectsInvalidUTF8(t *testing.T) {
 	}
 
 	body := "[{\"id\":\"sword_iron\",\"name\":\"\xff\xfe\",\"atk\":1}]"
-	code, out := call(t, ts, s, http.MethodPut, "/api/table/item", body)
+	code, out := putTable(t, ts, s, "item", tableRev(t, ts, s, "item"), body)
 	if code != http.StatusBadRequest {
 		t.Fatalf("깨진 바이트인데 %d 다: %v", code, out)
 	}
@@ -234,7 +270,7 @@ func TestPutWritesJSNumberSpelling(t *testing.T) {
 	{"id":"potion_hp","name":"체력 물약","price":0.0,"usable":true,"tags":["consume"]},
 	{"id":"potion_mp","name":"마나 물약","price":60,"usable":true,"tags":["consume"]},
 	{"id":"gem_fire","name":"불의 보석","price":1200,"grade":"epic"}]`
-	code, body := call(t, ts, s, http.MethodPut, "/api/table/item", rows)
+	code, body := putTable(t, ts, s, "item", tableRev(t, ts, s, "item"), rows)
 	if code != http.StatusOK {
 		t.Fatalf("저장이 %d 다: %v", code, body)
 	}
