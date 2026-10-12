@@ -77,6 +77,12 @@ func tableRev(t *testing.T, ts *httptest.Server, s *Server, name string) string 
 // putTable 은 If-Match 를 실은 표 PUT 이다. rev 가 "" 면 머리 없이 보낸다 (call 은 머리를 못 더한다).
 func putTable(t *testing.T, ts *httptest.Server, s *Server, name, rev, body string) (int, map[string]any) {
 	t.Helper()
+	return putTableSchemaRev(t, ts, s, name, rev, "", body)
+}
+
+// putTableSchemaRev 는 putTable 에 X-Schema-Rev 를 더 싣는다. schemaRev 가 "" 면 그 머리 없이 보낸다.
+func putTableSchemaRev(t *testing.T, ts *httptest.Server, s *Server, name, rev, schemaRev, body string) (int, map[string]any) {
+	t.Helper()
 	req, err := http.NewRequest(http.MethodPut, ts.URL+"/api/table/"+name, strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
@@ -85,6 +91,9 @@ func putTable(t *testing.T, ts *httptest.Server, s *Server, name, rev, body stri
 	req.Header.Set("Content-Type", "application/json")
 	if rev != "" {
 		req.Header.Set("If-Match", rev)
+	}
+	if schemaRev != "" {
+		req.Header.Set(schemaRevHeader, schemaRev)
 	}
 	res, err := ts.Client().Do(req)
 	if err != nil {

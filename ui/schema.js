@@ -731,11 +731,25 @@ async function putSchema(s) {
 
 // afterSchemaSaved 는 저장한 스키마로 사본과 표 화면을 다시 세운다. 열 이름이 바뀌었으니 표도 새로 연다.
 async function afterSchemaSaved() {
+  await reloadSchemaThen(state.name);
+}
+
+// reloadSchemaThen 은 state.schema(enum 값 목록)·스키마 탭 사본·ref id 캐시를 새로 읽은 뒤 표 name 을 다시 연다.
+// 스키마 저장 뒤와 표 PUT 409(표·스키마 둘 다) 의 「다시 읽기」 가 같이 쓴다.
+// 지금 표가 name 이 아니면(읽기 전이든 읽는 사이든 딴 표로 옮겼다) 아무것도 안 한다 — 그 표의 편집을 버리지 않는다.
+// 스키마 읽기가 실패하면 표는 안 건드린다 — dirty 는 openTable 성공 때만 꺼진다.
+async function reloadSchemaThen(name, { skipConfirm = false } = {}) {
+  if (state.name !== name) return;
   if (!(await loadSchemaEdit())) return;
-  state.ids.clear();
+  if (state.name !== name) return;
+  state.ids.clear(); // ref 가 가리키는 표·열이 바뀌었을 수 있다
   $("dataPath").textContent = `${state.schema.namespace} · 표 ${state.schema.tables.length}개`;
   const names = state.schema.tables.map((t) => t.name);
-  if (names.length) await openTable(names.includes(state.name) ? state.name : names[0]);
+  if (!names.length) {
+    toast("스키마에 표가 하나도 없다", true);
+    return;
+  }
+  await openTable(names.includes(name) ? name : names[0], { skipConfirm });
 }
 
 /* C# 만들기 ----------------------------------------------------------- */

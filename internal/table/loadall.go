@@ -37,6 +37,12 @@ func (e *SetError) Error() string {
 // 스키마의 표마다 파일이 하나씩 있어야 하고, 스키마에 없는 *.json 이 있으면 막는다.
 // schema.json 과 .datatool.json 은 표가 아니라 세지 않는다.
 func LoadAll(dir string, sch *schema.File) (map[string]*Table, error) {
+	return LoadAllExcept(dir, sch, "")
+}
+
+// LoadAllExcept 는 LoadAll 과 같되 skip 표의 파일은 읽지 않는다 (지도에도 없다).
+// 파일이 있는지는 똑같이 본다. 부르는 쪽이 그 표를 따로 읽어 갈아 끼울 때 두 번 읽지 않게 한다.
+func LoadAllExcept(dir string, sch *schema.File, skip string) (map[string]*Table, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
@@ -70,6 +76,9 @@ func LoadAll(dir string, sch *schema.File) (map[string]*Table, error) {
 
 	tables := make(map[string]*Table, len(sch.Tables))
 	for _, name := range sch.TableNames() {
+		if name == skip {
+			continue
+		}
 		t, err := Load(filepath.Join(dir, name+".json"))
 		if err != nil {
 			return nil, err

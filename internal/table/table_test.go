@@ -370,3 +370,24 @@ func TestIsDefaultUsesSameNumberSpelling(t *testing.T) {
 		t.Fatal("기본값 300.0 과 300 이 다르다고 나왔다")
 	}
 }
+
+// LoadAllExcept 는 skip 표를 안 읽지만, 그 파일이 있는지는 LoadAll 처럼 본다.
+func TestLoadAllExceptSkipsButChecksFile(t *testing.T) {
+	sch := loadSchema(t, okDir)
+	dir := t.TempDir()
+	for _, name := range []string{"item.json", "monster.json", "drop.json"} {
+		copyFile(t, filepath.Join(okDir, name), filepath.Join(dir, name))
+	}
+	// 깨진 item.json 도 skip 이면 안 읽으니 걸리지 않는다.
+	if err := os.WriteFile(filepath.Join(dir, "item.json"), []byte("{깨짐"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tables, err := LoadAllExcept(dir, sch, "item")
+	if err != nil || tables["item"] != nil || tables["monster"] == nil {
+		t.Fatalf("item 만 빼고 읽어야 한다: %v %v", tables, err)
+	}
+	os.Remove(filepath.Join(dir, "item.json"))
+	if _, err := LoadAllExcept(dir, sch, "item"); err == nil {
+		t.Fatal("skip 표의 파일이 없는데 막지 않았다")
+	}
+}

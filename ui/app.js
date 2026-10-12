@@ -16,6 +16,7 @@ const state = {
   grid: null,         // Tabulator 인스턴스
   dirty: false,
   rev: "",            // 보던 표의 디스크 rev. 표 PUT 의 If-Match 에 싣는다 (설계 2026-10-12 표저장rev)
+  schemaRev: "",      // 그 표를 읽을 때의 schema.json rev. 표 PUT 의 X-Schema-Rev 에 싣는다 — 밖에서 스키마만 바뀐 것을 잡는다
   saving: false,      // 표 저장 중 — Ctrl+S 연타의 둘째를 무시한다
   editGen: 0,         // 편집 세대. setDirty(true) 마다 늘어 저장 중 편집을 알아본다
   active: null,       // 마지막으로 누른 행 (범위가 비었을 때 행 지우기가 쓴다)
@@ -888,7 +889,8 @@ async function openTable(name, { skipConfirm = false } = {}) {
   }
   state.name = name;
   state.rev = res.body.rev || "";
-  if ($("toastReload")) $("toast").hidden = true; // 떠 있던 409 토스트는 옛 판 이야기다
+  state.schemaRev = res.body.schemaRev || "";
+  if ($("toastReload") || $("toastReloadSchema")) $("toast").hidden = true; // 떠 있던 409 토스트는 옛 판 이야기다
   await loadRefIDs(res.body.columns);
   await loadAssets(res.body.columns);
 
@@ -1016,9 +1018,12 @@ async function saveTable() {
   const gen = state.editGen;
   const columns = grid.columns;
   const rows = fromGrid(grid.getData(), columns);
+  const headers = { "Content-Type": "application/json", "If-Match": state.rev };
+  // 빈 값은 안 보낸다 — 머리가 없으면 서버가 스키마 견줌을 건너뛴다 (선택 머리).
+  if (state.schemaRev) headers["X-Schema-Rev"] = state.schemaRev;
   const res = await api(`/api/table/${encodeURIComponent(name)}`, {
     method: "PUT",
-    headers: { "Content-Type": "application/json", "If-Match": state.rev },
+    headers,
     body: JSON.stringify(rows),
   });
   const warnings = res.body.warnings || [];
@@ -1027,6 +1032,7 @@ async function saveTable() {
     // 저장 중 딴 표로 옮겼으면 rev·dirty·문제 목록·칸 표시는 지금 표 것이라 건드리지 않는다.
     if (state.grid === grid) {
       state.rev = res.body.rev;
+      if (res.body.schemaRev) state.schemaRev = res.body.schemaRev;
       if (state.editGen === gen) setDirty(false); // 저장 중 고친 것은 dirty 로 남아 다음 저장에 들어간다
       drawProblems([], warnings);
       markBad(warnings);
@@ -1039,26 +1045,61 @@ async function saveTable() {
     await refreshList();
     return;
   }
+  if (res.status === 409 && res.body.conflict === "schema") {
+    // 열·기본값이 바뀌었을 수 있어 표만 다시 읽으면 안 된다 — 스키마 캐시(state.schema·스키마 탭 사본)도 새로 읽는다.
+    // 「다시 읽기」 는 표도 새로 열어 고친 것을 버린다 — 표 409 와 같은 안내를 붙인다.
+    toast(`${res.body.error || "그사이 디스크의 schema.json 이 바뀌었다"}. 아무것도 안 썼다. ${reloadDiscardNote}`, true, {
+      id: "toastReloadSchema",
+      label: "다시 읽기",
+      run: () => reloadAfterConflict(name),
+    });
+    return;
+  }
   if (res.status === 409) {
     // dirty 와 state.rev 는 그대로 둔다 — rev 를 바꾸면 다음 저장이 디스크 것을 그냥 덮는다.
-    toast(`그사이 디스크의 ${name}.json 이 바뀌었다 — 아무것도 안 썼다. 「다시 읽기」 는 고친 것을 버리고 디스크 것을 읽는다. `
-      + "고친 것을 살리려면 칸을 복사해 뒀다가 다시 읽은 뒤 붙여 넣는다", true, {
+    toast(`그사이 디스크의 ${name}.json 이 바뀌었다 — 아무것도 안 썼다. ${reloadDiscardNote}`, true, {
       id: "toastReload",
       label: "다시 읽기",
-      run: () => {
-        if (state.name !== name) return; // 그사이 딴 표로 옮겼다 — 그 표의 편집을 버리지 않는다
-        openTable(name, { skipConfirm: true });
-      },
+      run: () => reloadAfterConflict(name),
     });
     return;
   }
   const problems = res.body.problems || [];
-  drawProblems(problems, warnings);
-  markBad(problems);
+  // 저장 중 딴 표로 옮겼거나 같은 표를 다시 열었으면(새 grid) 목록·빨간 칸은 지금 grid 것이 아니라 그리지 않는다 (200 길과 같은 문턱).
+  // 같은 grid 인데 저장 중 고쳤으면 그리되 한 줄 붙인다.
+  if (state.grid === grid) {
+    drawProblems(problems, warnings);
+    if (state.editGen !== gen) staleNote();
+    markBad(problems);
+  }
   toast(problems.length
     ? `검증에 걸려 안 썼다 — ${countText(problems.length, warnings.length)}`
     : (res.body.error || "저장하지 못했다"), true);
 }
+
+// staleNote 는 문제 목록 맨 위에 「줄 번호가 다를 수 있다」 를 붙인다. 목록은 보낸 때의 행 기준이다.
+function staleNote() {
+  const li = document.createElement("li");
+  li.id = "problemStale";
+  li.style.color = "var(--warn)";
+  li.style.padding = "4px 0";
+  li.textContent = "저장 중 편집이 있어 줄 번호가 다를 수 있다 — 다시 저장하면 새 목록이 나온다";
+  $("problemList").prepend(li);
+}
+
+// reloadAfterConflict 는 두 409(표·스키마) 토스트의 「다시 읽기」 실행부다.
+// 표 409 도 스키마까지 새로 읽는다 — 표와 스키마가 둘 다 밖에서 바뀌면 서버는 표 409 만 주는데,
+// 표만 다시 읽으면 state.schemaRev 만 새 값이 되고 state.schema(enum 목록)·스키마 탭 사본·ref id 캐시는 옛 것으로 남는다.
+// 행 편집과 스키마 편집은 서로 잠그므로(syncLocks) 여기서 스키마 탭의 저장 안 한 편집을 버릴 일은 없다.
+function reloadAfterConflict(name) {
+  if (state.name !== name) return; // 그사이 딴 표로 옮겼다 — 그 표의 편집을 버리지 않는다
+  if (typeof reloadSchemaThen === "function") reloadSchemaThen(name, { skipConfirm: true }); // schema.js
+  else openTable(name, { skipConfirm: true });
+}
+
+// reloadDiscardNote 는 409 토스트(표·스키마)가 같이 쓰는 「다시 읽기」 안내다. 두 토스트가 다른 글을 쓰지 않게 한 곳에 둔다.
+const reloadDiscardNote = "「다시 읽기」 는 고친 것을 버리고 디스크 것을 읽는다. "
+  + "고친 것을 살리려면 칸을 복사해 뒀다가 다시 읽은 뒤 붙여 넣는다";
 
 // countText 는 알림의 건수 글이다. 문제 목록 머리(오류+경고)와 헷갈리지 않게 둘을 나눠 적고, 경고가 없으면 짧게.
 const countText = (errors, warns) => (warns ? `오류 ${errors} · 경고 ${warns}` : `오류 ${errors}건`);

@@ -14,6 +14,7 @@
 const fs = require("fs");
 const path = require("path");
 const { execFileSync } = require("child_process");
+const crypto = require("crypto");
 const { open, MOD } = require("./cdp");
 
 function args() {
@@ -728,6 +729,257 @@ async function tableRevScenarios() {
       await editCell("item_0010", "atk", "4321");
       const text = await clickSave();
       return { note: text, ok: text.includes("저장했다") };
+    });
+
+  await schemaRevScenarios();
+  await inFlightScenarios();
+}
+
+/* 표 저장 rev 2판 — 스키마 409 · 저장 중 편집 · 저장 중 표 옮김 (설계 2026-10-12 표저장rev 4장 ⑤⑨) */
+
+// fileRev 는 서버와 같은 길로 기대 rev 를 낸다 — 디스크 바이트 그대로의 sha256 hex (설계 Q1·9-1 #5).
+const fileRev = (name) => crypto.createHash("sha256").update(fs.readFileSync(path.join(A.data, name))).digest("hex");
+const GRADE_OLD = `"Grade": ["common", "rare", "epic"]`;
+const GRADE_NEW = `"Grade": ["common", "rare", "epic", "legend"]`;
+
+// addGrade 는 밖에서 schema.json 의 Grade 에 값 하나를 더한다 (한 줄만 바뀐다). 못 바꿨으면 던진다.
+function addGrade() {
+  const file = readData("schema.json");
+  if (!file.includes(GRADE_OLD)) throw new Error("schema.json 에 Grade 줄이 없다 — 시험 데이터가 바뀌었다");
+  fs.writeFileSync(path.join(A.data, "schema.json"), file.replace(GRADE_OLD, GRADE_NEW));
+}
+
+// schemaConflictSave 는 칸 하나를 고친 뒤 밖에서 schema.json 을 바꾸고 저장해 스키마 409 를 낸다 (T7·T8).
+async function schemaConflictSave() {
+  await editCell("item_0010", "atk", "4321");
+  const itemBefore = readData("item.json");
+  addGrade();
+  const text = await clickSave();
+  const got = await page.eval(`({ reload: !!document.getElementById("toastReloadSchema"),
+    tableReload: !!document.getElementById("toastReload"), dirty: state.dirty,
+    dirtyMark: !document.getElementById("dirty").hidden,
+    bad: document.getElementById("toast").classList.contains("bad") })`);
+  return { text, ...got, itemSame: readData("item.json") === itemBefore };
+}
+
+// gradeSeen 은 스키마가 어디까지 새 값을 받았나 본다 — state.schema · 열 드롭다운 정의 · 스키마 탭 사본.
+async function gradeSeen() {
+  return page.eval(`({ schema: state.schema.enums.Grade,
+    column: state.grid.getColumn("grade").getDefinition().editorParams.values,
+    draft: schemaState.draft && schemaState.draft.enums.find((e) => e.name === "Grade").values.map((v) => v.name),
+    schemaRev: state.schemaRev, dirty: state.dirty, atk: state.grid.getRow("item_0010").getData().atk })`);
+}
+
+// enumItems 는 칸을 더블클릭해 enum 드롭다운을 열고 항목 글을 읽은 뒤 닫는다 (S8 과 같은 길).
+async function enumItems(id) {
+  const r = await cellRect(id, "grade");
+  await page.click(r.x, r.y, 2);
+  await page.sleep(300);
+  const items = await page.eval(`[...document.querySelectorAll(".tabulator-edit-list-item")].map(e=>e.textContent)`);
+  await page.key("Escape", "Escape", 27);
+  await page.sleep(150);
+  return items;
+}
+
+async function schemaRevScenarios() {
+  // T7 — 밖에서 schema.json 만 바뀌면 표 PUT 은 스키마 409. 「다시 읽기」 가 스키마·표를 새로 읽는다.
+  await scenario("T7", "스키마 밖 변경 → 409 schema → 다시 읽기 → 저장", "item.json 1 1 · schema.json 1 1",
+    exactly([["item.json", 1, 1], ["schema.json", 1, 1]]), async () => {
+      const c = await schemaConflictSave();
+      await page.shot(path.join(A.out, "T7-schema-conflict.png"));
+      const before = await gradeSeen();
+      await clickButton("toastReloadSchema"); // 누르면 토스트가 닫힌다 — 먼저 숨기면 단추를 못 누른다
+      await page.waitFor(`!state.dirty && state.schemaRev === ${J(fileRev("schema.json"))}`);
+      await page.sleep(200);
+      const after = await gradeSeen();
+      const items = await enumItems("item_0001");
+      await openTab("enum");
+      await pick("Grade");
+      const tabValues = await page.eval(`[...document.querySelectorAll("#valueTable tr[data-value]")].map((tr) => tr.dataset.value)`);
+      await page.shot(path.join(A.out, "T7-schema-tab.png"));
+      await openTab("data");
+      await editCell("item_0010", "atk", "4321");
+      const text = await clickSave();
+      const want = ["common", "rare", "epic", "legend"];
+      return { note: `${c.text.slice(0, 40)}… · 단추 ${c.reload}/${c.tableReload} · 빨강 ${c.bad} · dirty ${c.dirty}/${c.dirtyMark} · item 그대로 ${c.itemSame}` +
+          ` · 앞 ${J(before.schema)} · 뒤 ${J(after)} · 드롭다운 ${J(items)} · 스키마 탭 ${J(tabValues)} · ${text}`,
+        ok: c.text.includes("schema.json 이 바뀌었다") && c.reload && !c.tableReload && c.bad && c.dirty === true && c.dirtyMark && c.itemSame &&
+          J(before.schema) === J(want.slice(0, 3)) &&
+          J(after.schema) === J(want) && J(after.column) === J(want) && J(after.draft) === J(want) && after.atk === 70 &&
+          J(items) === J(want) && J(tabValues) === J(want) &&
+          text.includes("저장했다") && itemLine("item_0010").includes(`"atk":4321`) };
+    });
+
+  // T8 — 「다시 읽기」 의 스키마 GET 이 실패하면(깨진 schema.json) 고친 것과 dirty 가 그대로다. 고친 뒤엔 다시 된다.
+  await scenario("T8", "다시 읽기 때 스키마 GET 실패 → dirty 유지 · 고친 뒤 정상", "schema.json 1 1",
+    only("schema.json", 1, 1), async () => {
+      const c = await schemaConflictSave();
+      const good = readData("schema.json");
+      fs.writeFileSync(path.join(A.data, "schema.json"), good.slice(0, 40)); // 반쯤 쓰인 파일
+      await clickButton("toastReloadSchema"); // 누르면 토스트가 닫힌다 — 먼저 숨기면 단추를 못 누른다
+      const failText = await waitToast();
+      await page.sleep(300); // 실패 뒤 openTable 이 돌았다면 그 답이 올 시간
+      const failBad = await page.eval(`document.getElementById("toast").classList.contains("bad")`);
+      const kept = await gradeSeen();
+      const keptMark = await page.eval(`!document.getElementById("dirty").hidden`);
+      await page.shot(path.join(A.out, "T8-reload-failed.png"));
+      // 고친 파일을 되돌려 놓고 다시 저장 → 또 스키마 409 → 이번엔 다시 읽기가 된다.
+      fs.writeFileSync(path.join(A.data, "schema.json"), good);
+      const again = await clickSave();
+      const againBtn = await page.eval(`!!document.getElementById("toastReloadSchema")`);
+      await clickButton("toastReloadSchema"); // 누르면 토스트가 닫힌다 — 먼저 숨기면 단추를 못 누른다
+      await page.waitFor(`!state.dirty && state.schemaRev === ${J(fileRev("schema.json"))}`);
+      await page.sleep(200);
+      const back = await gradeSeen();
+      return { note: `${c.reload} · 실패 「${failText}」 빨강 ${failBad} · 남은 것 ${J(kept)} 표시 ${keptMark} · 다시 ${againBtn} · 뒤 ${J(back)}`,
+        ok: c.reload && failBad && kept.dirty === true && keptMark && kept.atk === 4321 && kept.schema.length === 3 &&
+          again.includes("schema.json 이 바뀌었다") && againBtn && back.dirty === false && back.atk === 70 && back.schema.length === 4 };
+    });
+}
+
+// delayNextPut 은 페이지 안 fetch 를 감싸 다음 표 PUT 의 응답을 붙잡는다. 요청은 바로 서버에 가서 디스크에 써지고,
+// 웹이 받는 답만 releasePut() 때까지 미뤄진다 — 「저장 중」 을 사람 손 빠르기와 상관없이 늘 같은 길로 만든다.
+// ms 를 주면 그만큼 뒤 저절로 풀린다 (0 이면 releasePut 만 기다린다).
+async function delayNextPut(ms = 0) {
+  await page.eval(`(() => {
+    const orig = window.fetch;
+    window.__putHeld = false;
+    window.fetch = (input, init) => {
+      if (!(init && init.method === "PUT" && String(input).startsWith("/api/table/"))) return orig(input, init);
+      window.fetch = orig;
+      const real = orig(input, init);
+      window.__putHeld = true;
+      return new Promise((resolve, reject) => {
+        window.__releasePut = () => { window.__putHeld = false; real.then(resolve, reject); };
+        if (${Number(ms)} > 0) setTimeout(() => window.__releasePut(), ${Number(ms)});
+      });
+    };
+    return 1; })()`);
+}
+// startHeldSave 는 저장 단추를 누르고 PUT 이 붙잡힐 때까지 기다린다 (요청은 서버에 닿았다).
+async function startHeldSave() {
+  await delayNextPut();
+  await hideToast();
+  await clickButton("save");
+  await page.waitFor("window.__putHeld === true");
+  await page.sleep(300); // 서버가 쓰기를 마칠 시간 — 답만 붙잡혀 있다
+}
+// releasePut 은 붙잡은 답을 풀고 저장 처리가 끝날 때까지 기다린다.
+async function releasePut() {
+  await page.eval("(window.__releasePut(), true)");
+  await page.waitFor("!state.saving");
+  await page.sleep(200);
+}
+const problemView = () => page.eval(`({ count: document.getElementById("problemCount").textContent,
+  html: document.getElementById("problemList").innerHTML,
+  stale: !!document.getElementById("problemStale"),
+  staleFirst: document.getElementById("problemList").firstElementChild?.id === "problemStale",
+  rows: [...document.querySelectorAll("#problemList li")].filter((li) => li.id !== "problemStale").length })`);
+
+async function inFlightScenarios() {
+  // T9 — 함정 ⑤ : 저장 중 고친 칸은 응답이 dirty 를 꺼 버리면 안 된다. rev 는 새로 받아 다음 저장이 409 없이 간다.
+  await scenario("T9", "저장 중 편집 → dirty 유지 · 다음 저장에 들어감", "item.json 2 2", only("item.json", 2, 2), async () => {
+    await editCell("item_0010", "atk", "4321");
+    await startHeldSave();
+    await editCell("item_0011", "atk", "5555");
+    await releasePut();
+    const mid = await page.eval(`({ dirty: state.dirty, mark: !document.getElementById("dirty").hidden, rev: state.rev,
+      v: state.grid.getRow("item_0011").getData().atk, toast: document.getElementById("toast").textContent })`);
+    const diskRev = fileRev("item.json");
+    const firstOnDisk = itemLine("item_0010").includes(`"atk":4321`) && !itemLine("item_0011").includes(`"atk":5555`);
+    const text = await clickSave();
+    const end = await page.eval("state.dirty");
+    return { note: `첫 저장 「${mid.toast}」 · 뒤 dirty ${mid.dirty}/${mid.mark} · 칸 ${mid.v} · rev 맞음 ${mid.rev === diskRev} · 디스크 첫 값만 ${firstOnDisk} · ${text} · dirty ${end}`,
+      ok: mid.toast.includes("저장했다") && mid.dirty === true && mid.mark && mid.v === 5555 && mid.rev === diskRev && firstOnDisk &&
+        text.includes("저장했다") && !text.includes("바뀌었다") && end === false && itemLine("item_0011").includes(`"atk":5555`) };
+  });
+
+  // T10 — 함정 ⑨ : 저장 중 딴 표로 옮기면 늦게 온 답은 지금 표(rev·dirty·문제 목록)를 안 건드린다.
+  //        저장 토스트는 저장을 시작한 표 이름으로 늘 뜬다 (설계 9장 「저장 때 이름 쓰기」).
+  //        뒤 절반은 400 길 — 늦게 온 검증 실패가 지금 표의 문제 목록을 안 덮는다.
+  await scenario("T10", "저장 중 표 옮김 → 늦은 답은 지금 표를 안 건드림 (200 · 400)", "item.json 1 1", only("item.json", 1, 1), async () => {
+    await editCell("item_0010", "atk", "4321");
+    await countToasts();
+    await startHeldSave();
+    await page.eval(`openTable("monster", { skipConfirm: true }).then(() => true)`);
+    await page.sleep(200);
+    const monRev = fileRev("monster.json");
+    const before = await page.eval(`({ name: state.name, rev: state.rev, dirty: state.dirty, toasts: window.__toasts })`);
+    await releasePut();
+    const after = await page.eval(`({ name: state.name, rev: state.rev, dirty: state.dirty, toasts: window.__toasts,
+      text: document.getElementById("toast").textContent })`);
+    const written = itemLine("item_0010").includes(`"atk":4321`);
+    const okSuccess = before.name === "monster" && before.rev === monRev && after.name === "monster" && after.rev === monRev &&
+      after.dirty === false && after.toasts === before.toasts + 1 && after.text.includes("item.json 을 저장했다") && written;
+
+    // 400 길 : monster 에 틀린 hp 를 넣어 저장 → 붙잡힌 사이 item 으로 옮김 → 400 이 풀려도 item 의 문제 목록은 그대로.
+    await editCell("mon_1", "hp", "0");
+    await startHeldSave();
+    await page.eval(`openTable("item", { skipConfirm: true }).then(() => true)`);
+    await page.sleep(200);
+    const itemRev = fileRev("item.json");
+    const pBefore = await problemView();
+    await releasePut();
+    const pAfter = await problemView();
+    const bad = await page.eval(`({ name: state.name, rev: state.rev, dirty: state.dirty, text: document.getElementById("toast").textContent })`);
+    const okBad = bad.name === "item" && bad.rev === itemRev && bad.dirty === false && bad.text.includes("검증에 걸려") &&
+      pAfter.html === pBefore.html && pAfter.count === pBefore.count && !pAfter.stale;
+    return { note: `200: 앞 ${J(before)} · 뒤 ${J({ ...after, text: after.text.slice(0, 30) })} · monster rev 맞음 ${after.rev === monRev} · 써짐 ${written}` +
+        ` · 400: ${bad.text.slice(0, 30)} · 문제 수 ${pBefore.count}→${pAfter.count} · 목록 같음 ${pAfter.html === pBefore.html} · 꼬리표 ${pAfter.stale} · item rev 맞음 ${bad.rev === itemRev}`,
+      ok: okSuccess && okBad };
+  });
+
+  // T11 — 400 + 저장 중 편집 : 문제 목록 맨 위에 「줄 번호가 다를 수 있다」 한 줄. 문제 수에는 안 센다.
+  //        앞 절반은 대조군 — 저장 중 편집이 없으면 그 줄이 안 붙는다.
+  await scenario("T11", "400 + 저장 중 편집 → 꼬리표 줄 · 수에 안 셈 · dirty 유지", "없음", none, async () => {
+    await editCell("item_1200", "atk", "-5");
+    const plain = await clickSave();
+    const p0 = await problemView();
+    await startHeldSave();
+    await editCell("item_0011", "name", "T11편집");
+    await releasePut();
+    const p1 = await problemView();
+    const got = await page.eval(`({ dirty: state.dirty, text: document.getElementById("toast").textContent,
+      stale: document.getElementById("problemStale")?.textContent || "" })`);
+    await page.shot(path.join(A.out, "T11-stale.png"));
+    return { note: `대조 「${plain.slice(0, 20)}」 수 ${p0.count} 꼬리표 ${p0.stale} · 뒤 수 ${p1.count} 줄 ${p1.rows} 꼬리표 ${p1.stale}/맨위 ${p1.staleFirst} · dirty ${got.dirty} · 「${got.stale}」`,
+      ok: plain.includes("검증에 걸려") && !p0.stale && p0.count === "1" &&
+        got.text.includes("검증에 걸려") && p1.stale && p1.staleFirst && p1.count === "1" && p1.rows === 1 &&
+        got.stale.includes("줄 번호가 다를 수 있다") && got.dirty === true };
+  });
+
+  // T13 — 밖에서 item.json 과 schema.json 이 둘 다 바뀌면 서버는 표 409 만 준다.
+  //        표 409 의 「다시 읽기」 도 스키마까지 새로 읽어야 enum 목록·스키마 탭 사본이 새 값이 된다 (설계 9-2).
+  await scenario("T13", "표·스키마 둘 다 밖 변경 → 409 table → 다시 읽기(스키마도) → 저장", "item.json 2 2 · schema.json 1 1",
+    exactly([["item.json", 2, 2], ["schema.json", 1, 1]]), async () => {
+      await editCell("item_0010", "atk", "4321");
+      const OLD = `{"id":"item_0003","name":"체력 물약 3"`;
+      const file = readData("item.json");
+      if (!file.includes(OLD)) throw new Error("item.json 에 item_0003 줄이 없다 — 시험 데이터가 바뀌었다");
+      fs.writeFileSync(path.join(A.data, "item.json"), file.replace(OLD, `{"id":"item_0003","name":"체력 물약 3 밖"`));
+      addGrade();
+      const text = await clickSave();
+      const c = await page.eval(`({ reload: !!document.getElementById("toastReload"),
+        schemaReload: !!document.getElementById("toastReloadSchema"), dirty: state.dirty })`);
+      const before = await gradeSeen();
+      await clickButton("toastReload"); // 누르면 토스트가 닫힌다 — 먼저 숨기면 단추를 못 누른다
+      await page.waitFor(`!state.dirty && state.schemaRev === ${J(fileRev("schema.json"))} && state.rev === ${J(fileRev("item.json"))}` +
+        ` && state.schema.enums.Grade.length === 4`);
+      await page.sleep(200);
+      const after = await gradeSeen();
+      const outside = await page.eval(`state.grid.getRow("item_0003").getData().name`);
+      const items = await enumItems("item_0001");
+      await page.shot(path.join(A.out, "T13-reloaded.png"));
+      await editCell("item_0010", "atk", "4321");
+      const saved = await clickSave();
+      const want = ["common", "rare", "epic", "legend"];
+      return { note: `${text.slice(0, 40)}… · 단추 ${c.reload}/${c.schemaReload} · dirty ${c.dirty} · 앞 ${J(before.schema)} · 뒤 ${J(after)}` +
+          ` · 밖 값 ${outside} · 드롭다운 ${J(items)} · ${saved}`,
+        ok: text.includes("item.json 이 바뀌었다") && c.reload && !c.schemaReload && c.dirty === true &&
+          J(before.schema) === J(want.slice(0, 3)) &&
+          J(after.schema) === J(want) && J(after.column) === J(want) && J(after.draft) === J(want) &&
+          after.dirty === false && after.atk === 70 && outside === "체력 물약 3 밖" && J(items) === J(want) &&
+          saved.includes("저장했다") && itemLine("item_0010").includes(`"atk":4321`) };
     });
 }
 

@@ -166,7 +166,9 @@ func TestGetTableReadsSchemaUnderLock(t *testing.T) {
 		_, body := call(t, ts, s, http.MethodGet, "/api/table/item", "")
 		done <- body
 	}()
-	time.Sleep(200 * time.Millisecond) // GET 이 잠금 앞까지 오게 둔다
+	// GET 이 잠금 앞까지 오게 둔다. 200ms 는 거짓 통과 위험만 있고 깨지진 않는다 —
+	// 늦게 오면 잠금 밖에서 읽었어도 새 스키마를 봐 통과할 뿐, 맞는 코드가 실패하는 일은 없다.
+	time.Sleep(200 * time.Millisecond)
 	if err := os.WriteFile(schemaPath, []byte(changed), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -178,5 +180,154 @@ func TestGetTableReadsSchemaUnderLock(t *testing.T) {
 		if col["name"] == "atk" && col["max"] != float64(8888) {
 			t.Fatalf("잠금 밖에서 읽은 옛 스키마다: atk max %v", col["max"])
 		}
+	}
+}
+
+// staleSchema 는 schema.json 의 atk max 를 밖에서 바꾼다 — 열 이름·형은 그대로라 검증엔 안 걸리는 변경이다.
+func staleSchema(t *testing.T, dir string) {
+	t.Helper()
+	path := filepath.Join(dir, "schema.json")
+	raw := readString(t, path)
+	changed := strings.Replace(raw, `"max": 9999,`, `"max": 8888,`, 1)
+	if changed == raw {
+		t.Fatal("시험 자료에 atk max 9999 가 없다")
+	}
+	if err := os.WriteFile(path, []byte(changed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// ① 표 GET 의 schemaRev 는 GET /api/schema 의 rev 와 같고, 디스크 schema.json 의 rev 다.
+func TestGetTableSchemaRevMatchesSchema(t *testing.T) {
+	ts, s, dir := newTestServer(t)
+	_, body := call(t, ts, s, http.MethodGet, "/api/table/item", "")
+	schemaRev, _ := schemaSource(t, ts, s)
+	if body["schemaRev"] != schemaRev || schemaRev != diskRev(t, filepath.Join(dir, "schema.json")) {
+		t.Fatalf("표 GET 의 schemaRev %v 가 스키마 rev %q 와 다르다", body["schemaRev"], schemaRev)
+	}
+}
+
+// ② X-Schema-Rev 가 디스크와 다르면 409 conflict "schema" 이고 아무것도 안 쓴다.
+func TestPutTableSchemaRevConflict(t *testing.T) {
+	ts, s, dir := newTestServer(t)
+	path := filepath.Join(dir, "item.json")
+	_, got := call(t, ts, s, http.MethodGet, "/api/table/item", "")
+	rev, oldSchemaRev := got["rev"].(string), got["schemaRev"].(string)
+	staleSchema(t, dir)
+	before, _ := os.ReadFile(path)
+
+	code, body := putTableSchemaRev(t, ts, s, "item", rev, oldSchemaRev, itemRows(13))
+	if code != http.StatusConflict || body["conflict"] != "schema" {
+		t.Fatalf("낡은 X-Schema-Rev 인데 %d %v 다 (409 conflict schema 여야 한다)", code, body)
+	}
+	if body["rev"] != rev || body["schemaRev"] != diskRev(t, filepath.Join(dir, "schema.json")) {
+		t.Fatalf("409 의 rev·schemaRev 가 디스크 것이 아니다: %v", body)
+	}
+	if after, _ := os.ReadFile(path); !bytes.Equal(before, after) {
+		t.Fatal("스키마 409 인데 파일이 바뀌었다")
+	}
+}
+
+// ③ X-Schema-Rev 를 안 실으면 스키마가 바뀌었어도 안 본다 (스크립트 호환). 200 에도 schemaRev 가 실린다.
+func TestPutTableWithoutSchemaRevSkipsCheck(t *testing.T) {
+	ts, s, dir := newTestServer(t)
+	rev := tableRev(t, ts, s, "item")
+	staleSchema(t, dir)
+
+	code, body := putTable(t, ts, s, "item", rev, itemRows(13))
+	if code != http.StatusOK {
+		t.Fatalf("X-Schema-Rev 없이 %d 다 (200 이어야 한다): %v", code, body)
+	}
+	if body["schemaRev"] != diskRev(t, filepath.Join(dir, "schema.json")) {
+		t.Fatalf("200 의 schemaRev %v 가 디스크 것이 아니다", body["schemaRev"])
+	}
+}
+
+// ④ 스키마 PUT 200 의 rev 는 디스크 schema.json 의 rev 다 — 쓴 바이트로 낸다.
+// schema.json 이 안 바뀌는 저장(바뀌는 것 없음)도 디스크 rev 와 같아야 한다.
+func TestPutSchemaRevIsWrittenBytes(t *testing.T) {
+	ts, s, dir := newTestServer(t)
+	schemaPath := filepath.Join(dir, "schema.json")
+	rev, source := schemaSource(t, ts, s)
+	changed := strings.Replace(source, "9999", "8888", 1)
+	if changed == source {
+		t.Fatal("source 에 9999 가 없다")
+	}
+	code, body := putSchema(t, ts, s, rev, editBody(changed, "[]"))
+	if code != http.StatusOK || body["rev"] != diskRev(t, schemaPath) || body["rev"] == rev {
+		t.Fatalf("스키마 PUT 이 %d, rev %v 다 (디스크 새 rev 여야 한다)", code, body["rev"])
+	}
+
+	rev, source = schemaSource(t, ts, s)
+	code, body = putSchema(t, ts, s, rev, editBody(source, "[]"))
+	if code != http.StatusOK || body["rev"] != rev || rev != diskRev(t, schemaPath) {
+		t.Fatalf("바뀌는 것 없는 스키마 PUT 이 %d, rev %v 다 (그대로여야 한다)", code, body["rev"])
+	}
+}
+
+// ⑤ 표 rev 409 에도 conflict "table" 과 schemaRev 가 실린다. 둘 다 낡았으면 표가 먼저다.
+func TestPutTableConflictNamesTable(t *testing.T) {
+	ts, s, dir := newTestServer(t)
+	_, got := call(t, ts, s, http.MethodGet, "/api/table/item", "")
+	oldSchemaRev := got["schemaRev"].(string)
+	staleSchema(t, dir)
+
+	code, body := putTableSchemaRev(t, ts, s, "item", strings.Repeat("0", 64), oldSchemaRev, itemRows(13))
+	if code != http.StatusConflict || body["conflict"] != "table" {
+		t.Fatalf("표·스키마 둘 다 낡았는데 %d %v 다 (409 conflict table 이어야 한다)", code, body)
+	}
+	if body["schemaRev"] != diskRev(t, filepath.Join(dir, "schema.json")) {
+		t.Fatalf("표 409 의 schemaRev %v 가 디스크 것이 아니다", body["schemaRev"])
+	}
+}
+
+// 디스크 표 파일이 깨졌으면 409 다. PUT 은 디스크 표를 파싱하지 않고 rev 부터 견준다 —
+// 깨진 파일은 GET 이 400 이라 클라이언트가 그 rev 를 가질 수 없다. 아무것도 안 쓴다.
+func TestPutTableBrokenDiskIs409(t *testing.T) {
+	ts, s, dir := newTestServer(t)
+	path := filepath.Join(dir, "item.json")
+	if err := os.WriteFile(path, []byte("{깨짐"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, body := putTable(t, ts, s, "item", strings.Repeat("0", 64), itemRows(13))
+	if code != http.StatusConflict || body["conflict"] != "table" {
+		t.Fatalf("깨진 디스크 파일인데 %d %v 다 (409 conflict table 이어야 한다)", code, body)
+	}
+	if raw, err := os.ReadFile(path); err != nil || string(raw) != "{깨짐" {
+		t.Fatalf("409 인데 파일이 바뀌었다: %q %v", raw, err)
+	}
+}
+
+// X-Schema-Rev 도 If-Match 와 같이 걷는다 — W/ 와 따옴표를 실어도 같은 rev 면 200 이다.
+func TestPutTableSchemaRevWeakQuoted(t *testing.T) {
+	ts, s, _ := newTestServer(t)
+	_, got := call(t, ts, s, http.MethodGet, "/api/table/item", "")
+	rev, schemaRev := got["rev"].(string), got["schemaRev"].(string)
+	code, body := putTableSchemaRev(t, ts, s, "item", rev, `W/"`+schemaRev+`"`, itemRows(13))
+	if code != http.StatusOK {
+		t.Fatalf("W/\"…\" 꼴 X-Schema-Rev 인데 %d %v 다 (200 이어야 한다)", code, body)
+	}
+}
+
+// BOM 붙은 schema.json 도 GET /api/schema 는 200 이다. rev 는 BOM 까지 든 디스크 바이트의 것이다 (함정 ②).
+func TestGetSchemaWithBOM(t *testing.T) {
+	ts, s, dir := newTestServer(t)
+	path := filepath.Join(dir, "schema.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append([]byte("\xEF\xBB\xBF"), raw...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, body := call(t, ts, s, http.MethodGet, "/api/schema", "")
+	if code != http.StatusOK {
+		t.Fatalf("BOM 붙은 schema.json 인데 %d %v 다 (200 이어야 한다)", code, body)
+	}
+	if body["rev"] != diskRev(t, path) {
+		t.Fatalf("rev %v 가 BOM 포함 디스크 바이트의 rev 가 아니다", body["rev"])
+	}
+	if _, got := call(t, ts, s, http.MethodGet, "/api/table/item", ""); got["schemaRev"] != body["rev"] {
+		t.Fatalf("표 GET 의 schemaRev %v 가 스키마 rev %v 와 다르다", got["schemaRev"], body["rev"])
 	}
 }

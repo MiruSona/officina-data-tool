@@ -75,13 +75,8 @@ func (s *Server) handleSchema(w http.ResponseWriter, r *http.Request) {
 // 편집 화면은 source 를 고쳐 그대로 돌려보낸다 — UI 꼴에서 파일 꼴로 되옮기다 칸을 잃지 않게.
 func (s *Server) getSchema(w http.ResponseWriter) {
 	s.mu.Lock()
-	raw, rev, err := s.readSchemaFile()
+	sch, rev, err := s.readSchema() // 표 GET 과 같은 길 — rev 는 BOM 까지 든 바이트, 읽기만 BOM 을 걷는다
 	s.mu.Unlock()
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	sch, err := schema.Parse(raw, table.SchemaFileName)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -168,15 +163,22 @@ func (s *Server) putSchema(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, body)
 		return
 	}
-	_, newRev, err := s.readSchemaFile()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok": true, "rev": newRev, "written": s.names(written),
+		"ok": true, "rev": writtenSchemaRev(plan.pending, rev), "written": s.names(written),
 		"warnings": plan.warnings, "notes": plan.notes,
 	})
+}
+
+// writtenSchemaRev 는 저장 뒤 schema.json 의 rev 다. 다시 읽지 않고 쓴 바이트로 낸다 —
+// 쓰기와 다시 읽기 사이 밖의 변경이 새 rev 에 섞이면 다음 저장이 그것을 덮는다 (표 PUT 과 같은 원칙).
+// schema.json 을 안 썼으면(바이트가 같아 pending 에 없음) If-Match 로 확인한 옛 rev 가 그대로 맞다.
+func writtenSchemaRev(pending []table.Pending, old string) string {
+	for _, p := range pending {
+		if filepath.Base(p.Path) == table.SchemaFileName {
+			return revOf(p.Data)
+		}
+	}
+	return old
 }
 
 // planEdit 는 설계 4장의 2~7 을 메모리에서 돈다. 부르는 쪽이 s.mu 를 잡고 온다.

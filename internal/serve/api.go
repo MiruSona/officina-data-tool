@@ -51,51 +51,54 @@ func (s *Server) handleTable(w http.ResponseWriter, r *http.Request) {
 // 저장할 때 table.Format 이 같은 기본값을 도로 빼므로 왕복해도 파일이 그대로다.
 // UI 가 스키마를 보고 따로 채우면 「채우는 규칙」이 둘로 갈린다.
 func (s *Server) getTable(w http.ResponseWriter, name string) {
+	code, body := s.readTable(name)
+	writeJSON(w, code, body) // 응답 쓰기는 잠금 밖에서 — 느린 클라이언트가 잠금을 붙들지 않게
+}
+
+// readTable 은 getTable 의 몸통이다. 잠금 안에서 읽기·파싱·본문 만들기까지만 한다.
+func (s *Server) readTable(name string) (int, map[string]any) {
 	// 스키마와 표 바이트를 같은 잠금 안에서 읽는다 — 스키마 PUT 과 겨뤄 옛 열 + 새 표가 짝이 되지 않게.
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	sch, err := s.loadSchema()
+	sch, schemaRev, err := s.readSchema()
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
+		return http.StatusBadRequest, errorBody(err)
 	}
 	st := sch.Table(name)
 	if st == nil {
-		writeJSON(w, http.StatusNotFound, map[string]any{
+		return http.StatusNotFound, map[string]any{
 			"ok": false, "error": fmt.Sprintf("스키마에 없는 표다: %q", name),
-		})
-		return
+		}
 	}
 	path, err := s.tablePath(name)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
+		return http.StatusBadRequest, errorBody(err)
 	}
 
 	// rev 와 행이 같은 판이도록 한 번 읽은 바이트에서 둘 다 낸다.
 	raw, rev, err := fileRev(path)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
+		return http.StatusBadRequest, errorBody(err)
 	}
 	t, err := table.Parse(textfile.TrimBOM(raw), path)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
+		return http.StatusBadRequest, errorBody(err)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":      true,
-		"name":    name,
-		"columns": columnsJSON(st),
-		"rows":    rowsJSON(t, st),
-		"rev":     rev,
-	})
+	return http.StatusOK, map[string]any{
+		"ok":        true,
+		"name":      name,
+		"columns":   columnsJSON(st),
+		"rows":      rowsJSON(t, st),
+		"rev":       rev,
+		"schemaRev": schemaRev,
+	}
 }
 
 // putTable 은 행 배열을 통째로 받아 **검증을 통과했을 때만** 파일을 다시 쓴다.
 //
 // 걸리면 한 글자도 안 쓰고 문제 목록을 400 으로 돌려준다 — 우회하는 문(--force)을 안 만든다.
 // If-Match 가 디스크 rev 와 다르면 409 로 안 쓴다. 차례는 Docs/Design/2026-10-12-표저장rev설계.md 2-4.
+// X-Schema-Rev 를 실었으면 그것도 디스크 schema.json rev 와 견준다 (표 409 다음).
 func (s *Server) putTable(w http.ResponseWriter, r *http.Request, name string) {
 	if ct := r.Header.Get("Content-Type"); !isJSONType(ct) {
 		writeJSON(w, http.StatusUnsupportedMediaType, map[string]any{
@@ -115,71 +118,84 @@ func (s *Server) putTable(w http.ResponseWriter, r *http.Request, name string) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	wantSchema := revHeader(r, schemaRevHeader)
+	code, body := s.saveTable(name, want, wantSchema, rows)
+	writeJSON(w, code, body) // getTable 과 같이 응답 쓰기는 잠금 밖에서
+}
 
+// saveTable 은 putTable 의 잠금 안 몸통이다. wantSchema 가 "" 면 스키마 rev 는 안 본다.
+func (s *Server) saveTable(name, want, wantSchema string, rows []json.RawMessage) (int, map[string]any) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	sch, tables, err := s.loadAll()
+	sch, schemaRev, err := s.readSchema()
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
+		return http.StatusBadRequest, errorBody(err)
+	}
+	// 이 표는 아래 fileRev 로 한 번만 읽는다. 받은 행으로 갈아 끼우니 LoadAll 이 읽을 까닭이 없다.
+	tables, err := table.LoadAllExcept(s.root, sch, name)
+	if err != nil {
+		return http.StatusBadRequest, errorBody(err)
 	}
 	st := sch.Table(name)
 	if st == nil {
-		writeJSON(w, http.StatusNotFound, map[string]any{
+		return http.StatusNotFound, map[string]any{
 			"ok": false, "error": fmt.Sprintf("스키마에 없는 표다: %q", name),
-		})
-		return
+		}
 	}
 	path, err := s.tablePath(name)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
+		return http.StatusBadRequest, errorBody(err)
 	}
 	raw, rev, err := fileRev(path)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
+		return http.StatusBadRequest, errorBody(err)
 	}
+	// rev 견줌이 먼저다 — 디스크 표를 파싱하지 않는다. 디스크 파일이 깨졌으면 GET 이 400 이라
+	// 클라이언트는 그 rev 를 가질 수 없으니 409 가 된다 (받은 행만 아래 parseRows 로 본다).
 	if want != rev {
-		writeJSON(w, http.StatusConflict, map[string]any{
-			"ok": false, "rev": rev, "error": "그사이 " + name + ".json 이 바뀌었다 — 다시 읽고 고친다",
-		})
-		return
+		return http.StatusConflict, map[string]any{
+			"ok": false, "conflict": "table", "rev": rev, "schemaRev": schemaRev,
+			"error": "그사이 " + name + ".json 이 바뀌었다 — 다시 읽고 고친다",
+		}
+	}
+	// 열 이름·형이 그대로인 스키마 변경(기본값·범위)은 검증에 안 걸린다 — 보던 판인지 rev 로 따로 본다.
+	if wantSchema != "" && wantSchema != schemaRev {
+		return http.StatusConflict, map[string]any{
+			"ok": false, "conflict": "schema", "rev": rev, "schemaRev": schemaRev,
+			"error": "그사이 schema.json 이 바뀌었다 — 다시 읽고 고친다",
+		}
 	}
 
 	t, err := parseRows(rows, path)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
+		return http.StatusBadRequest, errorBody(err)
 	}
 	tables[name] = t // 참조(ref)는 다른 표까지 봐야 하므로 이 표만 갈아 끼운다
 	problems, warnings := s.validateForSave(sch, tables)
 	if len(problems) > 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]any{
+		return http.StatusBadRequest, map[string]any{
 			"ok": false, "error": "검증에 걸려 안 썼다", "problems": problems, "warnings": warnings,
-		})
-		return
+		}
 	}
 
 	out, err := t.Format(st)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
+		return http.StatusBadRequest, errorBody(err)
 	}
 	// 디스크와 같은 바이트면 안 쓴다. 새 rev 는 다시 읽지 않고 쓴 바이트로 낸다 — 그사이 밖의 변경이 섞이지 않게.
 	if !bytes.Equal(out, raw) {
 		if err := table.WriteFile(path, out); err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
+			return http.StatusInternalServerError, errorBody(err)
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	return http.StatusOK, map[string]any{
 		"ok": true, "name": name, "rows": len(t.Rows),
-		"path":     filepath.ToSlash(filepath.Base(path)),
-		"warnings": warnings,
-		"rev":      revOf(out),
-	})
+		"path":      filepath.ToSlash(filepath.Base(path)),
+		"warnings":  warnings,
+		"rev":       revOf(out),
+		"schemaRev": schemaRev,
+	}
 }
 
 // validateForSave 는 저장 때의 검증이다. V10 오류(asset·asset_kind)는 처음부터 경고로 모은다 —
@@ -249,7 +265,22 @@ func (s *Server) validateStrict(sch *schema.File, tables map[string]*table.Table
 }
 
 func (s *Server) loadSchema() (*schema.File, error) {
-	return schema.Load(filepath.Join(s.root, table.SchemaFileName))
+	sch, _, err := s.readSchema()
+	return sch, err
+}
+
+// readSchema 는 schema.json 을 한 번 읽어 그 바이트로 파싱과 rev 를 같이 낸다 — 열과 rev 가 다른 판이 되지 않게.
+// 파싱은 schema.Load 와 같다 (BOM 걷고 Parse). rev 는 BOM 까지 든 원본 바이트로 낸다.
+func (s *Server) readSchema() (*schema.File, string, error) {
+	raw, rev, err := s.readSchemaFile()
+	if err != nil {
+		return nil, "", err
+	}
+	sch, err := schema.Parse(textfile.TrimBOM(raw), filepath.Join(s.root, table.SchemaFileName))
+	if err != nil {
+		return nil, "", err
+	}
+	return sch, rev, nil
 }
 
 func (s *Server) loadAll() (*schema.File, map[string]*table.Table, error) {
@@ -326,7 +357,11 @@ func allowMethod(w http.ResponseWriter, r *http.Request, method string) bool {
 }
 
 func writeError(w http.ResponseWriter, code int, err error) {
-	writeJSON(w, code, map[string]any{"ok": false, "error": err.Error()})
+	writeJSON(w, code, errorBody(err))
+}
+
+func errorBody(err error) map[string]any {
+	return map[string]any{"ok": false, "error": err.Error()}
 }
 
 func writeJSON(w http.ResponseWriter, code int, body map[string]any) {
